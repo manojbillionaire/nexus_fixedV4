@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <!-- Force browser to never cache this HTML file -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+  <title>Nexus Justice AI Solutions</title>
+  <meta name="description" content="AI-powered Legal SaaS Platform for Indian Advocates — DeepSeek, Gemini, Sarvam AI" />
+
+  <!-- PWA / Theme -->
+  <meta name="theme-color" content="#020617" />
+  <link rel="manifest" href="/manifest.json" />
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.ico" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
+
+  <!-- Apple iOS PWA -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Nexus Justice" />
+  <link rel="apple-touch-icon" href="/icon-180.png" />
+  <link rel="apple-touch-icon" sizes="152x152" href="/icon-152.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/icon-180.png" />
+
+  <!-- Android / Chrome -->
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="application-name" content="Nexus Justice" />
+
+  <!-- Open Graph (share preview) -->
+  <meta property="og:title" content="Nexus Justice AI Solutions" />
+  <meta property="og:description" content="AI Legal Platform for Indian Advocates — DeepSeek + Gemini + Sarvam AI" />
+  <meta property="og:image" content="/icon-512.png" />
+  <meta property="og:type" content="website" />
+
+  <!-- Microsoft Tiles -->
+  <meta name="msapplication-TileImage" content="/icon-144.png" />
+  <meta name="msapplication-TileColor" content="#020617" />
+
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #020617; color: #e2e8f0; font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+    /* Fix for mobile Chrome: 100vh includes the URL bar, causing content to be hidden.
+       Use CSS custom property --vh set by JS, falling back to 100vh on desktop. */
+    :root { --vh: 1vh; }
+    #root { height: 100vh; height: calc(var(--vh, 1vh) * 100); overflow: hidden; }
+  </style>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <div id="root"></div>
+  <script>
+    // Fix mobile Chrome 100vh bug — set --vh to actual visible viewport height
+    function setVh() {
+      var vh = window.innerHeight * 0.01;
+      document.documentElement.style.setProperty('--vh', vh + 'px');
+    }
+    setVh();
+    window.addEventListener('resize', setVh);
+    window.addEventListener('orientationchange', function() { setTimeout(setVh, 200); });
+  </script>
+  <script type="module" src="/src/main.jsx"></script>
+</body>
+</html>
