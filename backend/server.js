@@ -692,10 +692,8 @@ app.get('/api/health', (req, res) => res.json({ status: 'ok', version: '3.1', ti
 // ─── Serve React Frontend ─────────────────────────────────────────────────────
 const DIST = path.join(__dirname, 'frontend/dist');
 const fs = require('fs');
-if (!fs.existsSync(path.join(DIST, 'index.html'))) {
-  console.error('FATAL: frontend/dist/index.html not found. Did the Vite build run?');
-  process.exit(1);
-}
+console.log('Frontend dist path:', DIST);
+console.log('index.html exists:', fs.existsSync(path.join(DIST, 'index.html')));
 
 // 1. Hashed JS/CSS assets — cache forever (Vite adds content hash to filenames)
 app.use('/assets', express.static(path.join(DIST, 'assets'), {
