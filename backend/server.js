@@ -690,10 +690,16 @@ app.delete('/api/calls/:id', authMiddleware, async (req, res) => {
 app.get('/api/health', (req, res) => res.json({ status: 'ok', version: '3.1', timestamp: new Date().toISOString() }));
 
 // ─── Serve React Frontend ─────────────────────────────────────────────────────
-const DIST = path.join(__dirname, 'frontend/dist');
+// Support both /app/frontend/dist (new Dockerfile) and /frontend/dist (old)
 const fs = require('fs');
-console.log('Frontend dist path:', DIST);
-console.log('index.html exists:', fs.existsSync(path.join(DIST, 'index.html')));
+const possibleDists = [
+  path.join(__dirname, 'frontend/dist'),
+  '/app/frontend/dist',
+  '/frontend/dist',
+  path.join(process.cwd(), 'frontend/dist'),
+];
+const DIST = possibleDists.find(p => fs.existsSync(path.join(p, 'index.html'))) || path.join(__dirname, 'frontend/dist');
+console.log('Using DIST:', DIST, '| index.html exists:', fs.existsSync(path.join(DIST, 'index.html')));
 
 // 1. Hashed JS/CSS assets — cache forever (Vite adds content hash to filenames)
 app.use('/assets', express.static(path.join(DIST, 'assets'), {
