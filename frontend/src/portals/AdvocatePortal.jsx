@@ -3622,7 +3622,7 @@ setVoiceAiReply('Welcome! How can I help you today?');
               {/* AI reply */}
               {voiceAiReply && (
                 <div style={{ fontSize: 12, color: '#cbd5e1', lineHeight: 1.6, borderTop: '1px solid rgba(255,255,255,.06)', paddingTop: 8 }}>
-                  {voiceAiReply.length > 160 ? voiceAiReply.slice(0, 157) + '…' : voiceAiReply}
+                  {(() => { const c = voiceAiReply.replace(/<think>[\s\S]*?<\/think>/gi, '').trim(); return c.length > 160 ? c.slice(0, 157) + '…' : c; })()}
                 </div>
               )}
 
