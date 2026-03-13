@@ -1049,11 +1049,12 @@ export default function AdvocatePortal() {
       setVoiceAiLog([]);
       setVoiceAiReply('');
       setVoiceAiTranscript('');
-      // Start listening immediately
-     // Welcome then start listening
-voiceSpeak('Welcome! How can I help you today?', () => {
-  setTimeout(() => startDockListening(), 300);
- }); 
+     
+    
+// Start listening immediately  
+setTimeout(() => startDockListening(), 200);
+setVoiceAiReply('Welcome! How can I help you today?');
+ 
 
     }
   };
