@@ -209,7 +209,7 @@ async function callSarvam(text, targetLang = 'hi-IN', action = 'translate') {
         'od-IN': 'anushka', 'as-IN': 'anushka', 'ur-IN': 'anushka',
         'sa-IN': 'anushka', 'en-IN': 'anushka',
       };
-      const speaker = voiceMap[targetLang] || 'anushka';
+      const speaker = voiceMap[targetLang] || 'pavithra';
       const res = await axios.post('https://api.sarvam.ai/text-to-speech', {
         inputs: [text], target_language_code: targetLang,
         speaker, pitch: 0, pace: 1.0, loudness: 1.5,
