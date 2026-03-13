@@ -527,7 +527,7 @@ app.post('/api/sarvam/stt', authMiddleware, async (req, res) => {
     const formData = new FormData();
     const audioBuffer = Buffer.from(audioBase64, 'base64');
     // Use the MIME type reported by the client's MediaRecorder (webm on Android, mp4 on iOS)
-    const mime = clientMime || 'audio/webm';
+    const mime = (clientMime || 'audio/webm').split(';')[0];
     const ext = mime.includes('mp4') ? 'mp4' : mime.includes('ogg') ? 'ogg' : 'webm';
     formData.append('file', audioBuffer, { filename: `audio.${ext}`, contentType: mime });
     formData.append('model', 'saarika:v2');
