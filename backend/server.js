@@ -498,22 +498,68 @@ app.post('/api/ai/search', authMiddleware, async (req, res) => {
 });
 
 // ─── Sarvam AI: TTS + Translation ────────────────────────────────────────────
-app.post('/api/sarvam/translate', authMiddleware, async (req, res) => {
-  const { text, targetLang } = req.body;
-  const result = await callSarvam(text, targetLang, 'translate');
-  if (!result.success) {
-    // Fallback: use Gemini to translate
-    const aiResult = await callAI(`Translate the following to ${targetLang}: "${text}". Return only the translation.`);
-    return res.json({ ok: true, translated: aiResult.text, fallback: true });
-  }
-  res.json({ ok: true, translated: result.translated });
-});
-
 app.post('/api/sarvam/tts', authMiddleware, async (req, res) => {
-  const { text, lang } = req.body;
-  const result = await callSarvam(text, lang, 'tts');
-  if (!result.success) return res.json({ ok: false, error: result.error });
-  res.json({ ok: true, audio: result.audio });
+  const { text, lang = 'en-IN' } = req.body;
+  if (!text) return res.status(400).json({ ok: false, error: 'text required' });
+
+  const geminiKey = (process.env.GEMINI_API_KEY || '').replace(/\s/g, '');
+
+  // Map language codes to Gemini TTS voice names (best Malayalam/Indian voices)
+  const voiceMap = {
+    'ml-IN': 'Kore',      // Malayalam
+    'hi-IN': 'Charon',    // Hindi
+    'ta-IN': 'Fenrir',    // Tamil
+    'te-IN': 'Aoede',     // Telugu
+    'kn-IN': 'Leda',      // Kannada
+    'en-IN': 'Puck',      // English India
+  };
+  const voiceName = voiceMap[lang] || voiceMap['en-IN'];
+
+  // Try Gemini TTS first
+  if (geminiKey) {
+    try {
+      const response = await axios.post(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${geminiKey}`,
+        {
+          contents: [{ parts: [{ text }] }],
+          generationConfig: {
+            responseModalities: ['AUDIO'],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: { voiceName }
+              }
+            }
+          }
+        },
+        { timeout: 20000 }
+      );
+      const audioData = response.data?.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      if (audioData) {
+        return res.json({ ok: true, audio: audioData });
+      }
+    } catch (e) {
+      console.error('Gemini TTS error:', e.response?.data || e.message);
+    }
+  }
+
+  // Fallback to Sarvam TTS
+  try {
+    const sarvamKey = (process.env.SARVAM_API_KEY || '').replace(/\s/g, '');
+    if (!sarvamKey) return res.json({ ok: false, error: 'No TTS API key configured' });
+    const langMap = { 'ml-IN':'ml-IN','hi-IN':'hi-IN','ta-IN':'ta-IN','te-IN':'te-IN','kn-IN':'kn-IN','en-IN':'en-IN' };
+    const response = await axios.post('https://api.sarvam.ai/text-to-speech', {
+      inputs: [text.slice(0, 500)],
+      target_language_code: langMap[lang] || 'en-IN',
+      speaker: 'meera',
+      model: 'bulbul:v1',
+    }, { headers: { 'api-subscription-key': sarvamKey }, timeout: 20000 });
+    const audio = response.data?.audios?.[0];
+    if (audio) return res.json({ ok: true, audio });
+    return res.json({ ok: false, error: 'No audio returned' });
+  } catch (e) {
+    console.error('Sarvam TTS fallback error:', e.response?.data || e.message);
+    res.json({ ok: false, error: e.message });
+  }
 });
 
 // ─── Sarvam STT: Speech-to-Text (Saarika v2) ─────────────────────────────────
