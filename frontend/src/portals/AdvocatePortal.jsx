@@ -847,22 +847,36 @@ const voiceSpeak = async (text, onEnd) => {
   const langMap = { ml: 'ml-IN', hi: 'hi-IN', ta: 'ta-IN', te: 'te-IN', kn: 'kn-IN', bn: 'bn-IN', gu: 'gu-IN', pa: 'pa-IN', mr: 'mr-IN', ur: 'ur-IN', en: 'en-IN' };
   const langCode = langMap[lang?.code] || 'en-IN';
 
-  // ✅ Try free Web Speech API first (Google voice on Android/Chrome)
+  // ✅ Web Speech API first (Google voice on Android/Chrome)
   if (window.speechSynthesis) {
     window.speechSynthesis.cancel();
-    const utt = new SpeechSynthesisUtterance(text);
-    utt.lang = langCode;
-    utt.rate = 0.95;
-    utt.pitch = 1.05;
+
+    const speak = (voices) => {
+      const utt = new SpeechSynthesisUtterance(text);
+      utt.lang = langCode;
+      utt.rate = 0.9;
+      utt.pitch = 1.0;
+      const preferred = voices.find(v => v.lang === langCode || v.lang === langCode.replace('-', '_'));
+      if (preferred) utt.voice = preferred;
+      utt.onstart = () => setVoiceAiSpeaking(true);
+      utt.onend = () => { setVoiceAiSpeaking(false); onEnd?.(); };
+      utt.onerror = () => { setVoiceAiSpeaking(false); onEnd?.(); };
+      dockSynthRef.current = utt;
+      window.speechSynthesis.speak(utt);
+    };
+
     const voices = window.speechSynthesis.getVoices();
-    const preferred = voices.find(v => v.lang === langCode || v.lang === langCode.replace('-', '_'));
-    if (preferred) utt.voice = preferred;
-    utt.onstart = () => setVoiceAiSpeaking(true);
-    utt.onend = () => { setVoiceAiSpeaking(false); onEnd?.(); };
-    utt.onerror = () => { setVoiceAiSpeaking(false); onEnd?.(); };
-    dockSynthRef.current = utt;
-    window.speechSynthesis.speak(utt);
-    return; // ✅ Done — no API cost
+    if (voices.length > 0) {
+      speak(voices); // voices already loaded
+      return;
+    }
+    // Wait for voices to load then speak
+    window.speechSynthesis.onvoiceschanged = () => {
+      const v = window.speechSynthesis.getVoices();
+      window.speechSynthesis.onvoiceschanged = null;
+      speak(v);
+    };
+    return;
   }
 
   // Fallback: paid API (Gemini → Sarvam Bulbul v3)
