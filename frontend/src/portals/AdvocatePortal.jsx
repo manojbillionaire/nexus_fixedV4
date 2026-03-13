@@ -1050,7 +1050,11 @@ export default function AdvocatePortal() {
       setVoiceAiReply('');
       setVoiceAiTranscript('');
       // Start listening immediately
-      setTimeout(() => startDockListening(), 200);
+     // Welcome then start listening
+voiceSpeak('Welcome! How can I help you today?', () => {
+  setTimeout(() => startDockListening(), 300);
+ }); 
+
     }
   };
 
