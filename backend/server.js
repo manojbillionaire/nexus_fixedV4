@@ -530,7 +530,7 @@ app.post('/api/sarvam/stt', authMiddleware, async (req, res) => {
     const mime = (clientMime || 'audio/webm').split(';')[0];
     const ext = mime.includes('mp4') ? 'mp4' : mime.includes('ogg') ? 'ogg' : 'webm';
     formData.append('file', audioBuffer, { filename: `audio.${ext}`, contentType: mime });
-    formData.append('model', 'saarika:v2');
+    formData.append('model', 'saarika:v2.5');
     if (lang && lang !== 'auto') formData.append('language_code', lang);
     const response = await axios.post('https://api.sarvam.ai/speech-to-text', formData, {
       headers: { ...formData.getHeaders(), 'api-subscription-key': sarvamKey },
