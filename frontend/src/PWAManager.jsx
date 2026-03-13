@@ -68,7 +68,7 @@ function InstallBanner({ onDismiss }) {
             <div style={{ fontSize:11, color:'#475569', fontWeight:600 }}>AI Solutions · Legal SaaS</div>
           </div>
           <div style={{ marginLeft:'auto', flexShrink:0 }}>
-            <span className="badge" style={{ background:'rgba(16,185,129,.1)', color:'#10b981', border:'1px solid rgba(16,185,129,.2)' }}>FREE</span>
+            <span className="badge" style={{ background:'rgba(16,185,129,.1)', color:'#10b981', border:'1px solid rgba(16,185,129,.2)' }}></span>
           </div>
         </div>
 
@@ -100,7 +100,7 @@ function InstallBanner({ onDismiss }) {
           <button className="pwa-btn pwa-btn-primary" onClick={handleInstall} disabled={installing}>
             {installing
               ? <><span style={{ width:18, height:18, border:'2px solid rgba(0,0,0,.3)', borderTopColor:'#000', borderRadius:'50%', animation:'spin 0.7s linear infinite' }} /> Installing…</>
-              : <><span style={{ fontSize:20 }}>📲</span> Install App — It's Free</>
+              : <><span style={{ fontSize:20 }}>📲</span> Install App — </>
             }
           </button>
         ) : (
