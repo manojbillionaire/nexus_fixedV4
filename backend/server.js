@@ -550,8 +550,8 @@ app.post('/api/sarvam/tts', authMiddleware, async (req, res) => {
     const response = await axios.post('https://api.sarvam.ai/text-to-speech', {
       inputs: [text.slice(0, 500)],
       target_language_code: langMap[lang] || 'en-IN',
-      speaker: 'meera',
-      model: 'bulbul:v1',
+      speaker: 'anushka',
+      model: 'bulbul:v3',
     }, { headers: { 'api-subscription-key': sarvamKey }, timeout: 20000 });
     const audio = response.data?.audios?.[0];
     if (audio) return res.json({ ok: true, audio });
