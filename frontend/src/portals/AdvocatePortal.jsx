@@ -219,45 +219,46 @@ export default function AdvocatePortal() {
   useEffect(() => { deskChatRef.current?.scrollTo({ top: 99999, behavior: 'smooth' }); }, [deskChatHistory]);
 
   // ── TTS: Read page aloud (Sarvam Bulbul v3) ──
-  const readPageAloud = async (pageIdx) => {
-    const text = draftPages[pageIdx] || '';
-    if (!text.trim()) return;
-    setIsSpeaking(true); setSpeakPageNum(pageIdx + 1);
-    try {
-      const detectedLangCode = detectedLang?.code || 'en';
-      const langMap = { ml: 'ml-IN', hi: 'hi-IN', ta: 'ta-IN', te: 'te-IN', kn: 'kn-IN', bn: 'bn-IN', gu: 'gu-IN', pa: 'pa-IN', mr: 'mr-IN', ur: 'ur-IN', en: 'en-IN' };
-      const langCode = langMap[detectedLangCode] || 'en-IN';
-      // Chunk text for TTS (max ~500 chars per call)
-      const chunk = text.slice(0, 500);
-      const res = await api.post('/api/sarvam/tts', { text: chunk, lang: langCode });
-      if (res.data.ok && res.data.audio) {
-        const audioBytes = atob(res.data.audio);
-        const audioArr = new Uint8Array(audioBytes.length);
-        for (let i = 0; i < audioBytes.length; i++) audioArr[i] = audioBytes.charCodeAt(i);
-        const blob = new Blob([audioArr], { type: 'audio/wav' });
-        const url = URL.createObjectURL(blob);
-        const audio = new Audio(url);
-        speechSynthRef.current = audio;
-        audio.onended = () => { setIsSpeaking(false); setSpeakPageNum(null); URL.revokeObjectURL(url); };
-        audio.onerror = () => { setIsSpeaking(false); setSpeakPageNum(null); };
-        audio.play();
-        return;
-      }
-    } catch {}
-    // Fallback to browser TTS
-    if (window.speechSynthesis) {
-      window.speechSynthesis.cancel();
-      const utt = new SpeechSynthesisUtterance(text);
-      utt.rate = 0.92; utt.pitch = 1; utt.lang = 'en-IN';
-      utt.onstart = () => { setIsSpeaking(true); setSpeakPageNum(pageIdx + 1); };
-      utt.onend = () => { setIsSpeaking(false); setSpeakPageNum(null); };
-      utt.onerror = () => { setIsSpeaking(false); setSpeakPageNum(null); };
-      speechSynthRef.current = utt;
-      window.speechSynthesis.speak(utt);
-    } else {
-      setIsSpeaking(false); setSpeakPageNum(null);
+  // ── TTS: Read page aloud (Sarvam Bulbul v3) ──
+const readPageAloud = async (pageIdx) => {
+  const text = draftPages[pageIdx] || '';
+  if (!text.trim()) return;
+  setIsSpeaking(true); setSpeakPageNum(pageIdx + 1);
+  try {
+    const detectedLangCode = detectedLang?.code || 'en';
+    const langMap = { ml: 'ml-IN', hi: 'hi-IN', ta: 'ta-IN', te: 'te-IN', kn: 'kn-IN', bn: 'bn-IN', gu: 'gu-IN', pa: 'pa-IN', mr: 'mr-IN', ur: 'ur-IN', en: 'en-IN' };
+    const langCode = langMap[detectedLangCode] || 'en-IN';
+    // Chunk text for TTS (max ~500 chars per call)
+    const chunk = text.slice(0, 500);
+    const res = await api.post('/api/sarvam/tts', { text: chunk, lang: langCode });
+    if (res.data.ok && res.data.audio) {
+      const audioBytes = atob(res.data.audio);
+      const audioArr = new Uint8Array(audioBytes.length);
+      for (let i = 0; i < audioBytes.length; i++) audioArr[i] = audioBytes.charCodeAt(i);
+      const blob = new Blob([audioArr], { type: 'audio/wav' });
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      speechSynthRef.current = audio;
+      audio.onended = () => { setIsSpeaking(false); setSpeakPageNum(null); URL.revokeObjectURL(url); };
+      audio.onerror = () => { setIsSpeaking(false); setSpeakPageNum(null); };
+      audio.play();
+      return;
     }
-  };
+  } catch {}
+  // Fallback to browser TTS
+  if (window.speechSynthesis) {
+    window.speechSynthesis.cancel();
+    const utt = new SpeechSynthesisUtterance(text);
+    utt.rate = 0.92; utt.pitch = 1; utt.lang = 'en-IN';
+    utt.onstart = () => { setIsSpeaking(true); setSpeakPageNum(pageIdx + 1); };
+    utt.onend = () => { setIsSpeaking(false); setSpeakPageNum(null); };
+    utt.onerror = () => { setIsSpeaking(false); setSpeakPageNum(null); };
+    speechSynthRef.current = utt;
+    window.speechSynthesis.speak(utt);
+  } else {
+    setIsSpeaking(false); setSpeakPageNum(null);
+  }
+};
   const stopSpeaking = () => {
     if (speechSynthRef.current instanceof Audio) {
       speechSynthRef.current.pause();
@@ -461,21 +462,35 @@ export default function AdvocatePortal() {
     setTransLoading(false);
   };
 
-  const doTts = async () => {
-    if (!transResult) return;
-    setTransTtsLoading(true);
-    try {
-      const res = await api.post('/api/sarvam/tts', { text: transResult, lang: transTargetLang });
-      if (res.data.ok && res.data.audio) {
-        const audio = new Audio('data:audio/wav;base64,' + res.data.audio);
-        audio.play();
-      }
-    } catch { /* silent fail — fallback to browser TTS */ 
-      const utt = new SpeechSynthesisUtterance(transResult);
-      window.speechSynthesis.speak(utt);
-    }
+ const doTts = async () => {
+  if (!transResult) return;
+  setTransTtsLoading(true);
+
+  // ✅ Try free Web Speech API first (Google voice on Android/Chrome)
+  if (window.speechSynthesis) {
+    window.speechSynthesis.cancel();
+    const utt = new SpeechSynthesisUtterance(transResult);
+    utt.lang = transTargetLang;
+    utt.rate = 0.9;
+    utt.pitch = 1.0;
+    const voices = window.speechSynthesis.getVoices();
+    const preferred = voices.find(v => v.lang === transTargetLang || v.lang === transTargetLang.replace('-', '_'));
+    if (preferred) utt.voice = preferred;
+    window.speechSynthesis.speak(utt);
     setTransTtsLoading(false);
-  };
+    return; // ✅ Done — no API cost
+  }
+
+  // Fallback: paid API (Gemini → Sarvam Bulbul v3)
+  try {
+    const res = await api.post('/api/sarvam/tts', { text: transResult, lang: transTargetLang });
+    if (res.data.ok && res.data.audio) {
+      const audio = new Audio('data:audio/wav;base64,' + res.data.audio);
+      audio.play();
+    }
+  } catch {}
+  setTransTtsLoading(false);
+};
 
   const useScannedTextForTranslation = () => {
     const text = convPages.map(p => p.text).join('\n\n').trim();
@@ -826,45 +841,51 @@ export default function AdvocatePortal() {
       .trim();
   };
 
-  const voiceSpeak = async (text, onEnd) => {
-    if (!text?.trim()) { onEnd?.(); return; }
-    setVoiceAiSpeaking(true);
-    try {
-      // Detect language to choose the right Bulbul v3 voice
-      const lang = detectLanguage(text);
-      const langMap = { ml: 'ml-IN', hi: 'hi-IN', ta: 'ta-IN', te: 'te-IN', kn: 'kn-IN', bn: 'bn-IN', gu: 'gu-IN', pa: 'pa-IN', mr: 'mr-IN', ur: 'ur-IN', en: 'en-IN' };
-      const langCode = langMap[lang?.code] || 'en-IN';
-      const chunk = text.slice(0, 500); // TTS limit
-      const res = await api.post('/api/sarvam/tts', { text: chunk, lang: langCode });
-      if (res.data.ok && res.data.audio) {
-        const audioBytes = atob(res.data.audio);
-        const audioArr = new Uint8Array(audioBytes.length);
-        for (let i = 0; i < audioBytes.length; i++) audioArr[i] = audioBytes.charCodeAt(i);
-        const blob = new Blob([audioArr], { type: 'audio/wav' });
-        const url = URL.createObjectURL(blob);
-        const audio = new Audio(url);
-        dockSynthRef.current = audio;
-        audio.onended = () => { setVoiceAiSpeaking(false); URL.revokeObjectURL(url); onEnd?.(); };
-        audio.onerror = () => { setVoiceAiSpeaking(false); URL.revokeObjectURL(url); onEnd?.(); };
-        // .catch() prevents unhandled promise rejection on mobile when autoplay is blocked
-        await audio.play().catch(() => { setVoiceAiSpeaking(false); URL.revokeObjectURL(url); onEnd?.(); });
-        return;
-      }
-    } catch {}
-    // Fallback to browser speechSynthesis
-    if (window.speechSynthesis) {
-      window.speechSynthesis.cancel();
-      const utt = new SpeechSynthesisUtterance(text);
-      utt.lang = 'en-IN'; utt.rate = 0.95; utt.pitch = 1.05;
-      utt.onstart = () => setVoiceAiSpeaking(true);
-      utt.onend = () => { setVoiceAiSpeaking(false); onEnd?.(); };
-      utt.onerror = () => { setVoiceAiSpeaking(false); onEnd?.(); };
-      dockSynthRef.current = utt;
-      window.speechSynthesis.speak(utt);
-    } else {
-      setVoiceAiSpeaking(false); onEnd?.();
+const voiceSpeak = async (text, onEnd) => {
+  if (!text?.trim()) { onEnd?.(); return; }
+  const lang = detectLanguage(text);
+  const langMap = { ml: 'ml-IN', hi: 'hi-IN', ta: 'ta-IN', te: 'te-IN', kn: 'kn-IN', bn: 'bn-IN', gu: 'gu-IN', pa: 'pa-IN', mr: 'mr-IN', ur: 'ur-IN', en: 'en-IN' };
+  const langCode = langMap[lang?.code] || 'en-IN';
+
+  // ✅ Try free Web Speech API first (Google voice on Android/Chrome)
+  if (window.speechSynthesis) {
+    window.speechSynthesis.cancel();
+    const utt = new SpeechSynthesisUtterance(text);
+    utt.lang = langCode;
+    utt.rate = 0.95;
+    utt.pitch = 1.05;
+    const voices = window.speechSynthesis.getVoices();
+    const preferred = voices.find(v => v.lang === langCode || v.lang === langCode.replace('-', '_'));
+    if (preferred) utt.voice = preferred;
+    utt.onstart = () => setVoiceAiSpeaking(true);
+    utt.onend = () => { setVoiceAiSpeaking(false); onEnd?.(); };
+    utt.onerror = () => { setVoiceAiSpeaking(false); onEnd?.(); };
+    dockSynthRef.current = utt;
+    window.speechSynthesis.speak(utt);
+    return; // ✅ Done — no API cost
+  }
+
+  // Fallback: paid API (Gemini → Sarvam Bulbul v3)
+  setVoiceAiSpeaking(true);
+  try {
+    const chunk = text.slice(0, 500);
+    const res = await api.post('/api/sarvam/tts', { text: chunk, lang: langCode });
+    if (res.data.ok && res.data.audio) {
+      const audioBytes = atob(res.data.audio);
+      const audioArr = new Uint8Array(audioBytes.length);
+      for (let i = 0; i < audioBytes.length; i++) audioArr[i] = audioBytes.charCodeAt(i);
+      const blob = new Blob([audioArr], { type: 'audio/wav' });
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      dockSynthRef.current = audio;
+      audio.onended = () => { setVoiceAiSpeaking(false); URL.revokeObjectURL(url); onEnd?.(); };
+      audio.onerror = () => { setVoiceAiSpeaking(false); URL.revokeObjectURL(url); onEnd?.(); };
+      await audio.play().catch(() => { setVoiceAiSpeaking(false); URL.revokeObjectURL(url); onEnd?.(); });
+      return;
     }
-  };
+  } catch {}
+  setVoiceAiSpeaking(false); onEnd?.();
+};
 
   // Parse voice command → action, returns { action, param } or null
   const parseVoiceCommand = (text) => {
