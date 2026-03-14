@@ -205,17 +205,18 @@ async function callSarvam(text, targetLang = 'hi-IN', action = 'translate') {
       }, { headers: { 'api-subscription-key': process.env.SARVAM_API_KEY }, timeout: 10000 });
       return { success: true, translated: res.data.translated_text };
     } else if (action === 'tts') {
-   const voiceMap = {
-  'hi-IN': 'kavya', 'bn-IN': 'roopa', 'pa-IN': 'rohan',
-  'mr-IN': 'kavya', 'ta-IN': 'kavya', 'te-IN': 'kavya',
-  'kn-IN': 'kavya', 'ml-IN': 'kavya', 'gu-IN': 'kavya',
-  'od-IN': 'kavya', 'as-IN': 'kavya', 'ur-IN': 'kavya',
-  'sa-IN': 'kavya', 'en-IN': 'kavya',
-};
+        const voiceMap = {
+          'hi-IN': 'kavya', 'bn-IN': 'roopa', 'pa-IN': 'rohan',
+          'mr-IN': 'kavya', 'ta-IN': 'kavya', 'te-IN': 'kavya',
+          'kn-IN': 'kavya', 'ml-IN': 'kavya', 'gu-IN': 'kavya',
+          'od-IN': 'kavya', 'as-IN': 'kavya', 'ur-IN': 'kavya',
+          'sa-IN': 'kavya', 'en-IN': 'kavya',
+        };
+        const speaker = voiceMap[targetLang] || 'kavya';
+        const res = await axios.post('https://api.sarvam.ai/text-to-speech', {
 
 
-     const speaker = voiceMap[targetLang] || 'kavya';
-      const res = await axios.post('https://api.sarvam.ai/text-to-speech', {
+     
         inputs: [text], target_language_code: targetLang,
         speaker, pitch: 0, pace: 1.0, loudness: 1.5,
         speech_sample_rate: 22050, enable_preprocessing: true, model: 'bulbul:v3',
