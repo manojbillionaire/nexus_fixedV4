@@ -202,14 +202,15 @@ async function callSarvam(text, targetLang = 'hi-IN', action = 'translate') {
       return { success: true, translated: res.data.translated_text };
     } else if (action === 'tts') {
       // Voice mapping per language (Bulbul v3)
-      const voiceMap = {
-        'hi-IN': 'anushka', 'bn-IN': 'riya', 'pa-IN': 'pavithra',
-        'mr-IN': 'anushka', 'ta-IN': 'anushka', 'te-IN': 'anushka',
-        'kn-IN': 'anushka', 'ml-IN': 'anushka', 'gu-IN': 'anushka',
-        'od-IN': 'anushka', 'as-IN': 'anushka', 'ur-IN': 'anushka',
-        'sa-IN': 'anushka', 'en-IN': 'anushka',
-      };
-      const speaker = voiceMap[targetLang] || 'pavithra';
+     const voiceMap = {
+  'hi-IN': 'kavya', 'bn-IN': 'roopa', 'pa-IN': 'rohan',
+  'mr-IN': 'kavya', 'ta-IN': 'kavya', 'te-IN': 'kavya',
+  'kn-IN': 'kavya', 'ml-IN': 'kavya', 'gu-IN': 'kavya',
+  'od-IN': 'kavya', 'as-IN': 'kavya', 'ur-IN': 'kavya',
+  'sa-IN': 'kavya', 'en-IN': 'kavya',
+};
+const speaker = voiceMap[targetLang] || 'kavya';
+      const speaker = voiceMap[targetLang] || 'kavya';
       const res = await axios.post('https://api.sarvam.ai/text-to-speech', {
         inputs: [text], target_language_code: targetLang,
         speaker, pitch: 0, pace: 1.0, loudness: 1.5,
