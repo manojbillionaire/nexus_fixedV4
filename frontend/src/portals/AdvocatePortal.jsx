@@ -1082,58 +1082,97 @@ const voiceSpeak = async (text, onEnd) => {
     });
   };
 
-  const startDockListening = async () => {
-    if (!voiceAiOnRef.current) return;
-    // Stop any existing recording
-    if (dockRecRef.current) { try { dockRecRef.current.stop(); } catch {} dockRecRef.current = null; }
-    setVoiceAiListening(true);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const chunks = [];
-      // Pick best MIME type supported by this device (Android=webm, iOS=mp4)
-      const preferredMime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus', ''].find(
-        m => m === '' || MediaRecorder.isTypeSupported(m)
-      );
-      const mr = preferredMime ? new MediaRecorder(stream, { mimeType: preferredMime }) : new MediaRecorder(stream);
-      const actualMime = mr.mimeType || 'audio/webm';
-      dockRecRef.current = mr;
-      mr.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
-      mr.onstop = async () => {
-        stream.getTracks().forEach(t => t.stop());
-        setVoiceAiListening(false);
-        if (!voiceAiOnRef.current) return;
-        const blob = new Blob(chunks, { type: actualMime });
-        if (blob.size < 1000) {
-          // Too short — likely silence, re-listen
-          if (voiceAiOnRef.current) setTimeout(() => startDockListening(), 400);
-          return;
-        }
-        const reader = new FileReader();
-        reader.onloadend = async () => {
-          const base64 = reader.result.split(',')[1];
-          try {
-            // Pass actual MIME so server labels the file correctly for Sarvam STT
-            const res = await api.post('/api/sarvam/stt', { audioBase64: base64, mimeType: actualMime, lang: 'auto' });
-            if (res.data.ok && res.data.transcript?.trim()) {
-              executeVoiceCommand(res.data.transcript.trim());
-            } else {
-              setVoiceAiReply('Could not hear clearly. Tap the mic to try again.');
-              if (voiceAiOnRef.current) setTimeout(() => startDockListening(), 1000);
-            }
-          } catch {
-            setVoiceAiReply('Voice service unavailable. Please check your API key.');
-          }
-        };
-        reader.readAsDataURL(blob);
-      };
-      // Record for up to 6 seconds then auto-stop
-      mr.start();
-      setTimeout(() => { if (mr.state === 'recording') mr.stop(); }, 6000);
-    } catch {
+ const startDockListening = () => {
+  if (!voiceAiOnRef.current) return;
+  // Stop any existing recording
+  if (dockRecRef.current) { try { dockRecRef.current.stop(); } catch {} dockRecRef.current = null; }
+  setVoiceAiListening(true);
+
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  // ✅ Try free Web Speech Recognition first (Google on Android/Chrome)
+  if (SpeechRecognition) {
+    const recognition = new SpeechRecognition();
+    // Detect language from current context
+    const langMap = { ml: 'ml-IN', hi: 'hi-IN', ta: 'ta-IN', te: 'te-IN', kn: 'kn-IN', bn: 'bn-IN', gu: 'gu-IN', pa: 'pa-IN', mr: 'mr-IN', ur: 'ur-IN', en: 'en-IN' };
+    recognition.lang = langMap[detectedLang?.code] || 'ml-IN';
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    recognition.onstart = () => setVoiceAiListening(true);
+
+    recognition.onresult = (e) => {
+      const transcript = e.results[0][0].transcript.trim();
+      setVoiceAiTranscript(transcript);
+      if (transcript) {
+        executeVoiceCommand(transcript);
+      } else {
+        setVoiceAiReply('Could not hear clearly. Tap the mic to try again.');
+        if (voiceAiOnRef.current) setTimeout(() => startDockListening(), 1000);
+      }
+    };
+
+    recognition.onend = () => { setVoiceAiListening(false); };
+
+    recognition.onerror = (e) => {
       setVoiceAiListening(false);
-      voiceSpeak('Microphone access denied. Please allow mic permission.', undefined);
-    }
-  };
+      if (e.error === 'not-allowed') {
+        voiceSpeak('Microphone access denied. Please allow mic permission.', undefined);
+      } else {
+        setVoiceAiReply('Could not hear clearly. Tap the mic to try again.');
+        if (voiceAiOnRef.current) setTimeout(() => startDockListening(), 1000);
+      }
+    };
+
+    dockRecRef.current = recognition;
+    recognition.start();
+    return; // ✅ Done — no API cost
+  }
+
+  // Fallback: Sarvam STT (paid)
+  navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+    const chunks = [];
+    const preferredMime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus', ''].find(
+      m => m === '' || MediaRecorder.isTypeSupported(m)
+    );
+    const mr = preferredMime ? new MediaRecorder(stream, { mimeType: preferredMime }) : new MediaRecorder(stream);
+    const actualMime = mr.mimeType || 'audio/webm';
+    dockRecRef.current = mr;
+    mr.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+    mr.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      setVoiceAiListening(false);
+      if (!voiceAiOnRef.current) return;
+      const blob = new Blob(chunks, { type: actualMime });
+      if (blob.size < 1000) {
+        if (voiceAiOnRef.current) setTimeout(() => startDockListening(), 400);
+        return;
+      }
+      const reader = new FileReader();
+      reader.onloadend = async () => {
+        const base64 = reader.result.split(',')[1];
+        try {
+          const res = await api.post('/api/sarvam/stt', { audioBase64: base64, mimeType: actualMime, lang: 'auto' });
+          if (res.data.ok && res.data.transcript?.trim()) {
+            executeVoiceCommand(res.data.transcript.trim());
+          } else {
+            setVoiceAiReply('Could not hear clearly. Tap the mic to try again.');
+            if (voiceAiOnRef.current) setTimeout(() => startDockListening(), 1000);
+          }
+        } catch {
+          setVoiceAiReply('Voice service unavailable. Please check your API key.');
+        }
+      };
+      reader.readAsDataURL(blob);
+    };
+    mr.start();
+    setTimeout(() => { if (mr.state === 'recording') mr.stop(); }, 6000);
+  }).catch(() => {
+    setVoiceAiListening(false);
+    voiceSpeak('Microphone access denied. Please allow mic permission.', undefined);
+  });
+};
 
   const toggleVoiceAi = () => {
     if (voiceAiOn) {
