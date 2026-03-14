@@ -291,51 +291,85 @@ const readPageAloud = (pageIdx) => {
     setIsSpeaking(false); setSpeakPageNum(null);
   };
 
-  // ── Voice input (Sarvam STT — Saarika v2, multilingual) ──
-  const mediaRecorderRef = useRef(null);
-  const audioChunksRef = useRef([]);
+  // ── Voice input (Web Speech API first → Sarvam STT fallback) ──
+const mediaRecorderRef = useRef(null);
+const audioChunksRef = useRef([]);
 
-  const startVoiceInput = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      audioChunksRef.current = [];
-      const preferredMime2 = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus', ''].find(
-        m => m === '' || MediaRecorder.isTypeSupported(m)
-      );
-      const mr = preferredMime2 ? new MediaRecorder(stream, { mimeType: preferredMime2 }) : new MediaRecorder(stream);
-      const actualMime2 = mr.mimeType || 'audio/webm';
-      mr.ondataavailable = e => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
-      mr.onstop = async () => {
-        stream.getTracks().forEach(t => t.stop());
-        const blob = new Blob(audioChunksRef.current, { type: actualMime2 });
-        const reader = new FileReader();
-        reader.onloadend = async () => {
-          const base64 = reader.result.split(',')[1];
-          try {
-            const res = await api.post('/api/sarvam/stt', { audioBase64: base64, mimeType: actualMime2, lang: 'auto' });
-            if (res.data.ok && res.data.transcript) {
-              setDeskInput(d => (d + ' ' + res.data.transcript).trim());
-              // Auto-detect language from transcript
-              const lang = detectLanguage(res.data.transcript);
-              if (lang) setDetectedLang(lang);
-            }
-          } catch {}
-          setVoiceListening(false); setVoiceTranscript('');
-        };
-        reader.readAsDataURL(blob);
+const startVoiceInput = () => {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  // ✅ Try free Web Speech Recognition first (Google on Android/Chrome)
+  if (SpeechRecognition) {
+    const recognition = new SpeechRecognition();
+    recognition.lang = detectedLang?.code === 'ml' ? 'ml-IN' :
+                       detectedLang?.code === 'hi' ? 'hi-IN' :
+                       detectedLang?.code === 'ta' ? 'ta-IN' :
+                       detectedLang?.code === 'te' ? 'te-IN' :
+                       detectedLang?.code === 'kn' ? 'kn-IN' : 'en-IN';
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    recognition.onstart = () => setVoiceListening(true);
+    recognition.onresult = (e) => {
+      const transcript = e.results[0][0].transcript;
+      setDeskInput(d => (d + ' ' + transcript).trim());
+      const lang = detectLanguage(transcript);
+      if (lang) setDetectedLang(lang);
+    };
+    recognition.onend = () => { setVoiceListening(false); setVoiceTranscript(''); };
+    recognition.onerror = () => { setVoiceListening(false); setVoiceTranscript(''); };
+
+    recognitionRef.current = recognition;
+    recognition.start();
+    return; // ✅ Done — no API cost
+  }
+
+  // Fallback: Sarvam STT (paid)
+  navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+    audioChunksRef.current = [];
+    const preferredMime2 = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus', ''].find(
+      m => m === '' || MediaRecorder.isTypeSupported(m)
+    );
+    const mr = preferredMime2 ? new MediaRecorder(stream, { mimeType: preferredMime2 }) : new MediaRecorder(stream);
+    const actualMime2 = mr.mimeType || 'audio/webm';
+    mr.ondataavailable = e => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
+    mr.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      const blob = new Blob(audioChunksRef.current, { type: actualMime2 });
+      const reader = new FileReader();
+      reader.onloadend = async () => {
+        const base64 = reader.result.split(',')[1];
+        try {
+          const res = await api.post('/api/sarvam/stt', { audioBase64: base64, mimeType: actualMime2, lang: 'auto' });
+          if (res.data.ok && res.data.transcript) {
+            setDeskInput(d => (d + ' ' + res.data.transcript).trim());
+            const lang = detectLanguage(res.data.transcript);
+            if (lang) setDetectedLang(lang);
+          }
+        } catch {}
+        setVoiceListening(false); setVoiceTranscript('');
       };
-      mediaRecorderRef.current = mr;
-      mr.start();
-      setVoiceListening(true);
-    } catch {
-      setDeskInput(d => d + '[Mic access denied]');
-    }
-  };
-  const stopVoiceInput = () => {
-    mediaRecorderRef.current?.stop();
-    setVoiceListening(false); setVoiceTranscript('');
-  };
+      reader.readAsDataURL(blob);
+    };
+    mediaRecorderRef.current = mr;
+    mr.start();
+    setVoiceListening(true);
+  }).catch(() => {
+    setDeskInput(d => d + '[Mic access denied]');
+  });
+};
 
+const stopVoiceInput = () => {
+  // Stop Web Speech Recognition if active
+  if (recognitionRef.current) {
+    recognitionRef.current.stop();
+    recognitionRef.current = null;
+  }
+  // Stop MediaRecorder if active
+  mediaRecorderRef.current?.stop();
+  setVoiceListening(false); setVoiceTranscript('');
+};
   // ── Page management ──
   const addNewPage = () => {
     if (draftPages.length >= MAX_PAGES) return;
