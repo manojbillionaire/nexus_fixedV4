@@ -149,13 +149,17 @@ async function callAI(prompt, systemPrompt = '', options = {}) {
   if (sarvamKey) {
     try {
       const res = await axios.post('https://api.sarvam.ai/v1/chat/completions', {
-        model: 'sarvam-m',        // ✅ upgraded from sarvam-m (legacy)
+        model: 'sarvam-30b',        // ✅ upgraded from sarvam-m (legacy)
         messages,
         max_tokens: 1000,
         temperature: 0.7,
       }, { headers: { 'api-subscription-key': sarvamKey }, timeout: 15000 });
       const raw = res.data.choices[0].message.content;
-      const clean = raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+     const clean = raw
+  .replace(/<think>[\s\S]*?<\/think>/gi, '')  // remove closed think blocks
+  .replace(/<think>[\s\S]*/gi, '')              // remove unclosed think blocks
+  .replace(/\*\*thinking\*\*[\s\S]*?\*\*\/thinking\*\*/gi, '') // remove **thinking** blocks
+  .trim();
       return { text: clean, model: 'sarvam-30b' };
     } catch (e) { console.log('Sarvam-30B failed, trying DeepSeek:', e.message); }
   }
