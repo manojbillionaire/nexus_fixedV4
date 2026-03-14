@@ -153,7 +153,7 @@ async function callAI(prompt, systemPrompt = '', options = {}) {
         messages,
         max_tokens: 500,
         temperature: 0.7,
-      }, { headers: { 'api-subscription-key': sarvamKey }, timeout: 15000 });
+      }, { headers: { 'api-subscription-key': sarvamKey }, timeout: 25000 });
       const raw = res.data.choices[0].message.content;
      const clean = raw
   .replace(/<think>[\s\S]*?<\/think>/gi, '')  // remove closed think blocks
