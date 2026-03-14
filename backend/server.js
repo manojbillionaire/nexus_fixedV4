@@ -187,17 +187,7 @@ async function callAI(prompt, systemPrompt = '', options = {}) {
 
   return { text: 'AI service temporarily unavailable. Please try again.', model: 'none' };
 }
-```
 
----
-
-### Only one thing changed from the old code:
-- Line `model: 'sarvam-m'` → changed to `model: 'sarvam-30b'`
-- Comment updated to reflect the upgrade
-- Timeout reduced from `20000` to `15000` for faster failure detection
-
-### File to edit:
-```
 backend/server.js  →  Lines 135–190
 
 // ─── Sarvam AI (TTS / Translation) ──────────────────────────────────────────
