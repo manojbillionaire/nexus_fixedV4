@@ -219,45 +219,67 @@ export default function AdvocatePortal() {
   useEffect(() => { deskChatRef.current?.scrollTo({ top: 99999, behavior: 'smooth' }); }, [deskChatHistory]);
 
   // ── TTS: Read page aloud (Sarvam Bulbul v3) ──
-  // ── TTS: Read page aloud (Sarvam Bulbul v3) ──
-const readPageAloud = async (pageIdx) => {
+ // ── TTS: Read page aloud (Web Speech first → Sarvam fallback) ──
+const readPageAloud = (pageIdx) => {
   const text = draftPages[pageIdx] || '';
   if (!text.trim()) return;
-  setIsSpeaking(true); setSpeakPageNum(pageIdx + 1);
-  try {
-    const detectedLangCode = detectedLang?.code || 'en';
-    const langMap = { ml: 'ml-IN', hi: 'hi-IN', ta: 'ta-IN', te: 'te-IN', kn: 'kn-IN', bn: 'bn-IN', gu: 'gu-IN', pa: 'pa-IN', mr: 'mr-IN', ur: 'ur-IN', en: 'en-IN' };
-    const langCode = langMap[detectedLangCode] || 'en-IN';
-    // Chunk text for TTS (max ~500 chars per call)
-    const chunk = text.slice(0, 500);
-    const res = await api.post('/api/sarvam/tts', { text: chunk, lang: langCode });
-    if (res.data.ok && res.data.audio) {
-      const audioBytes = atob(res.data.audio);
-      const audioArr = new Uint8Array(audioBytes.length);
-      for (let i = 0; i < audioBytes.length; i++) audioArr[i] = audioBytes.charCodeAt(i);
-      const blob = new Blob([audioArr], { type: 'audio/wav' });
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      speechSynthRef.current = audio;
-      audio.onended = () => { setIsSpeaking(false); setSpeakPageNum(null); URL.revokeObjectURL(url); };
-      audio.onerror = () => { setIsSpeaking(false); setSpeakPageNum(null); };
-      audio.play();
-      return;
-    }
-  } catch {}
-  // Fallback to browser TTS
+  const detectedLangCode = detectedLang?.code || 'en';
+  const langMap = { ml: 'ml-IN', hi: 'hi-IN', ta: 'ta-IN', te: 'te-IN', kn: 'kn-IN', bn: 'bn-IN', gu: 'gu-IN', pa: 'pa-IN', mr: 'mr-IN', ur: 'ur-IN', en: 'en-IN' };
+  const langCode = langMap[detectedLangCode] || 'en-IN';
+
+  // ✅ Try free Web Speech API first
   if (window.speechSynthesis) {
     window.speechSynthesis.cancel();
-    const utt = new SpeechSynthesisUtterance(text);
-    utt.rate = 0.92; utt.pitch = 1; utt.lang = 'en-IN';
-    utt.onstart = () => { setIsSpeaking(true); setSpeakPageNum(pageIdx + 1); };
-    utt.onend = () => { setIsSpeaking(false); setSpeakPageNum(null); };
-    utt.onerror = () => { setIsSpeaking(false); setSpeakPageNum(null); };
-    speechSynthRef.current = utt;
-    window.speechSynthesis.speak(utt);
-  } else {
-    setIsSpeaking(false); setSpeakPageNum(null);
+
+    const speak = (voices) => {
+      const utt = new SpeechSynthesisUtterance(text);
+      utt.lang = langCode;
+      utt.rate = 0.9;
+      utt.pitch = 1.0;
+      const googleExact = voices.find(v =>
+        v.name.toLowerCase().includes('google') &&
+        (v.lang === langCode || v.lang === langCode.replace('-', '_'))
+      );
+      const anyExact = voices.find(v =>
+        v.lang === langCode || v.lang === langCode.replace('-', '_')
+      );
+      const googleHindi = voices.find(v => v.lang === 'hi-IN' && v.name.toLowerCase().includes('google'));
+      const chosen = googleExact || anyExact || googleHindi;
+      if (chosen) utt.voice = chosen;
+      utt.onstart = () => { setIsSpeaking(true); setSpeakPageNum(pageIdx + 1); };
+      utt.onend = () => { setIsSpeaking(false); setSpeakPageNum(null); };
+      utt.onerror = () => { setIsSpeaking(false); setSpeakPageNum(null); };
+      speechSynthRef.current = utt;
+      window.speechSynthesis.speak(utt);
+    };
+
+    const voices = window.speechSynthesis.getVoices();
+    if (voices.length > 0) { speak(voices); return; }
+    window.speechSynthesis.onvoiceschanged = () => {
+      window.speechSynthesis.onvoiceschanged = null;
+      speak(window.speechSynthesis.getVoices());
+    };
+    return;
   }
+
+  // Fallback: paid API (Gemini → Sarvam Bulbul v3)
+  setIsSpeaking(true); setSpeakPageNum(pageIdx + 1);
+  api.post('/api/sarvam/tts', { text: text.slice(0, 500), lang: langCode })
+    .then(res => {
+      if (res.data.ok && res.data.audio) {
+        const audioBytes = atob(res.data.audio);
+        const audioArr = new Uint8Array(audioBytes.length);
+        for (let i = 0; i < audioBytes.length; i++) audioArr[i] = audioBytes.charCodeAt(i);
+        const blob = new Blob([audioArr], { type: 'audio/wav' });
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        speechSynthRef.current = audio;
+        audio.onended = () => { setIsSpeaking(false); setSpeakPageNum(null); URL.revokeObjectURL(url); };
+        audio.onerror = () => { setIsSpeaking(false); setSpeakPageNum(null); };
+        audio.play();
+      } else { setIsSpeaking(false); setSpeakPageNum(null); }
+    })
+    .catch(() => { setIsSpeaking(false); setSpeakPageNum(null); });
 };
   const stopSpeaking = () => {
     if (speechSynthRef.current instanceof Audio) {
@@ -462,36 +484,54 @@ const readPageAloud = async (pageIdx) => {
     setTransLoading(false);
   };
 
- const doTts = async () => {
+const doTts = () => {
   if (!transResult) return;
   setTransTtsLoading(true);
 
-  // ✅ Try free Web Speech API first (Google voice on Android/Chrome)
+  // ✅ Try free Web Speech API first
   if (window.speechSynthesis) {
     window.speechSynthesis.cancel();
-    const utt = new SpeechSynthesisUtterance(transResult);
-    utt.lang = transTargetLang;
-    utt.rate = 0.9;
-    utt.pitch = 1.0;
+
+    const speak = (voices) => {
+      const utt = new SpeechSynthesisUtterance(transResult);
+      utt.lang = transTargetLang;
+      utt.rate = 0.9;
+      utt.pitch = 1.0;
+      const googleExact = voices.find(v =>
+        v.name.toLowerCase().includes('google') &&
+        (v.lang === transTargetLang || v.lang === transTargetLang.replace('-', '_'))
+      );
+      const anyExact = voices.find(v =>
+        v.lang === transTargetLang || v.lang === transTargetLang.replace('-', '_')
+      );
+      const googleHindi = voices.find(v => v.lang === 'hi-IN' && v.name.toLowerCase().includes('google'));
+      const chosen = googleExact || anyExact || googleHindi;
+      if (chosen) utt.voice = chosen;
+      utt.onend = () => setTransTtsLoading(false);
+      utt.onerror = () => setTransTtsLoading(false);
+      window.speechSynthesis.speak(utt);
+    };
+
     const voices = window.speechSynthesis.getVoices();
-    const preferred = voices.find(v => v.lang === transTargetLang || v.lang === transTargetLang.replace('-', '_'));
-    if (preferred) utt.voice = preferred;
-    window.speechSynthesis.speak(utt);
-    setTransTtsLoading(false);
-    return; // ✅ Done — no API cost
+    if (voices.length > 0) { speak(voices); return; }
+    window.speechSynthesis.onvoiceschanged = () => {
+      window.speechSynthesis.onvoiceschanged = null;
+      speak(window.speechSynthesis.getVoices());
+    };
+    return;
   }
 
   // Fallback: paid API (Gemini → Sarvam Bulbul v3)
-  try {
-    const res = await api.post('/api/sarvam/tts', { text: transResult, lang: transTargetLang });
-    if (res.data.ok && res.data.audio) {
-      const audio = new Audio('data:audio/wav;base64,' + res.data.audio);
-      audio.play();
-    }
-  } catch {}
-  setTransTtsLoading(false);
+  api.post('/api/sarvam/tts', { text: transResult, lang: transTargetLang })
+    .then(res => {
+      if (res.data.ok && res.data.audio) {
+        const audio = new Audio('data:audio/wav;base64,' + res.data.audio);
+        audio.play();
+      }
+      setTransTtsLoading(false);
+    })
+    .catch(() => { setTransTtsLoading(false); });
 };
-
   const useScannedTextForTranslation = () => {
     const text = convPages.map(p => p.text).join('\n\n').trim();
     if (text) { setTransSourceText(text.slice(0, 2000)); setTransResult(''); }
