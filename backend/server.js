@@ -188,7 +188,6 @@ async function callAI(prompt, systemPrompt = '', options = {}) {
   return { text: 'AI service temporarily unavailable. Please try again.', model: 'none' };
 }
 
-backend/server.js  →  Lines 135–190
 
 // ─── Sarvam AI (TTS / Translation) ──────────────────────────────────────────
 async function callSarvam(text, targetLang = 'hi-IN', action = 'translate') {
