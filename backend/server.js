@@ -151,7 +151,7 @@ async function callAI(prompt, systemPrompt = '', options = {}) {
       const res = await axios.post('https://api.sarvam.ai/v1/chat/completions', {
         model: 'sarvam-30b',        // ✅ upgraded from sarvam-m (legacy)
         messages,
-        max_tokens: 1000,
+        max_tokens: 500,
         temperature: 0.7,
       }, { headers: { 'api-subscription-key': sarvamKey }, timeout: 15000 });
       const raw = res.data.choices[0].message.content;
