@@ -132,11 +132,10 @@ async function seedData() {
   } catch (e) { console.error('Seed error:', e.message); }
 }
 
-// ─── AI Orchestration (Sarvam primary, DeepSeek/Gemini fallback) ──────────────
+// ─── AI Orchestration (Sarvam-30B primary, DeepSeek/Gemini fallback) ──────────
 async function callAI(prompt, systemPrompt = '', options = {}) {
   const { language = 'en' } = options;
 
-  // Sanitize all keys
   const sarvamKey   = (process.env.SARVAM_API_KEY   || '').replace(/\s/g, '');
   const deepseekKey = (process.env.DEEPSEEK_API_KEY || '').replace(/\s/g, '');
   const geminiKey   = (process.env.GEMINI_API_KEY   || '').replace(/\s/g, '');
@@ -146,22 +145,22 @@ async function callAI(prompt, systemPrompt = '', options = {}) {
     { role: 'user',   content: prompt }
   ];
 
-  // 1️⃣ Sarvam first (already paid, Indian legal context aware)
+  // 1️⃣ Sarvam-30B first (Indian servers, fast, real-time optimized)
   if (sarvamKey) {
     try {
       const res = await axios.post('https://api.sarvam.ai/v1/chat/completions', {
-        model: 'sarvam-m',
+        model: 'sarvam-30b',        // ✅ upgraded from sarvam-m (legacy)
         messages,
         max_tokens: 1000,
         temperature: 0.7,
-      }, { headers: { 'api-subscription-key': sarvamKey }, timeout: 20000 });
+      }, { headers: { 'api-subscription-key': sarvamKey }, timeout: 15000 });
       const raw = res.data.choices[0].message.content;
       const clean = raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-      return { text: clean, model: 'sarvam' };
-    } catch (e) { console.log('Sarvam LLM failed, trying DeepSeek:', e.message); }
+      return { text: clean, model: 'sarvam-30b' };
+    } catch (e) { console.log('Sarvam-30B failed, trying DeepSeek:', e.message); }
   }
 
-  // 2️⃣ DeepSeek fallback
+  // 2️⃣ DeepSeek fallback (China servers — slower)
   if (deepseekKey) {
     try {
       const res = await axios.post('https://api.deepseek.com/v1/chat/completions', {
@@ -188,6 +187,18 @@ async function callAI(prompt, systemPrompt = '', options = {}) {
 
   return { text: 'AI service temporarily unavailable. Please try again.', model: 'none' };
 }
+```
+
+---
+
+### Only one thing changed from the old code:
+- Line `model: 'sarvam-m'` → changed to `model: 'sarvam-30b'`
+- Comment updated to reflect the upgrade
+- Timeout reduced from `20000` to `15000` for faster failure detection
+
+### File to edit:
+```
+backend/server.js  →  Lines 135–190
 
 // ─── Sarvam AI (TTS / Translation) ──────────────────────────────────────────
 async function callSarvam(text, targetLang = 'hi-IN', action = 'translate') {
