@@ -132,78 +132,131 @@ async function seedData() {
   } catch (e) { console.error('Seed error:', e.message); }
 }
 
-// ─── AI Orchestration ─────────────────────────────
+// ─── AI Orchestration (Sarvam-30B primary, DeepSeek/Gemini fallback) ──────────
 async function callAI(prompt, systemPrompt = '', options = {}) {
-  const { language = 'en', mode = 'chat' } = options;
+  const { language = 'en' } = options;
 
-  const sarvamKey  = (process.env.SARVAM_API_KEY  || '').replace(/\s/g, '');
+  const sarvamKey   = (process.env.SARVAM_API_KEY   || '').replace(/\s/g, '');
   const deepseekKey = (process.env.DEEPSEEK_API_KEY || '').replace(/\s/g, '');
-  const geminiKey  = (process.env.GEMINI_API_KEY   || '').replace(/\s/g, '');
+  const geminiKey   = (process.env.GEMINI_API_KEY   || '').replace(/\s/g, '');
 
   const messages = [
     { role: 'system', content: systemPrompt || 'You are Nexus, a legal AI assistant for Indian advocates. Answer clearly and accurately.' },
     { role: 'user',   content: prompt }
   ];
 
-  // ── DRAFTING MODE → Sarvam-30B first ──
-  if (mode === 'draft') {
-    if (sarvamKey) {
+  // 1️⃣ Sarvam-30B first (Indian servers, fast, real-time optimized)
+  if (sarvamKey) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
       try {
         const res = await axios.post('https://api.sarvam.ai/v1/chat/completions', {
           model: 'sarvam-30b',
-          messages, max_tokens: 2000, temperature: 0.4,
+          messages,
+          max_tokens: 500,
+          temperature: 0.7,
         }, { headers: { 'api-subscription-key': sarvamKey }, timeout: 25000 });
         const raw = res.data.choices[0].message.content;
         const clean = raw
           .replace(/<think>[\s\S]*?<\/think>/gi, '')
           .replace(/<think>[\s\S]*/gi, '')
+          .replace(/\*\*thinking\*\*[\s\S]*?\*\*\/thinking\*\*/gi, '')
           .trim();
         return { text: clean, model: 'sarvam-30b' };
-      } catch (e) { console.log('Sarvam-30B draft failed:', e.message); }
+      } catch (e) {
+        console.log(`Sarvam-30B attempt ${attempt} failed:`, e.message);
+      }
     }
   }
 
-  // ── CHAT/VOICE MODE → Gemini first (fast) ──
+  // 2️⃣ DeepSeek fallback (China servers — slower)
+  if (deepseekKey) {
+    try {
+      const res = await axios.post('https://api.deepseek.com/v1/chat/completions', {
+        model: 'deepseek-chat',
+        messages,
+        max_tokens: 500,
+        temperature: 0.7,
+      }, { headers: { Authorization: `Bearer ${deepseekKey}` }, timeout: 15000 });
+      return { text: res.data.choices[0].message.content, model: 'deepseek' };
+    } catch (e) { console.log('DeepSeek failed, trying Gemini:', e.message); }
+  }
+
+  // 3️⃣ Gemini last resort
   if (geminiKey) {
     try {
       const res = await axios.post(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
         { contents: [{ parts: [{ text: (systemPrompt ? systemPrompt + '\n\n' : '') + prompt }] }] },
-        { timeout: 10000 }
+        { timeout: 20000 }
       );
       return { text: res.data.candidates[0].content.parts[0].text, model: 'gemini' };
-    } catch (e) { console.log('Gemini failed, trying Sarvam-30B:', e.message); }
-  }
-
-  // ── Fallback → Sarvam-30B ──
-  if (sarvamKey) {
-    try {
-      const res = await axios.post('https://api.sarvam.ai/v1/chat/completions', {
-        model: 'sarvam-30b',
-        messages, max_tokens: 500, temperature: 0.7,
-      }, { headers: { 'api-subscription-key': sarvamKey }, timeout: 25000 });
-      const raw = res.data.choices[0].message.content;
-      const clean = raw
-        .replace(/<think>[\s\S]*?<\/think>/gi, '')
-        .replace(/<think>[\s\S]*/gi, '')
-        .trim();
-      return { text: clean, model: 'sarvam-30b' };
-    } catch (e) { console.log('Sarvam-30B failed, trying DeepSeek:', e.message); }
-  }
-
-  // ── Last resort → DeepSeek ──
-  if (deepseekKey) {
-    try {
-      const res = await axios.post('https://api.deepseek.com/v1/chat/completions', {
-        model: 'deepseek-chat',
-        messages, max_tokens: 500, temperature: 0.7,
-      }, { headers: { Authorization: `Bearer ${deepseekKey}` }, timeout: 15000 });
-      return { text: res.data.choices[0].message.content, model: 'deepseek' };
-    } catch (e) { console.log('DeepSeek failed:', e.message); }
+    } catch (e) { console.log('Gemini failed:', e.message); }
   }
 
   return { text: 'AI service temporarily unavailable. Please try again.', model: 'none' };
 }
+
+ // ─── Combined AI + TTS (single call for speed) ────────────────────────────
+async function playAISpeak(prompt, systemPrompt, lang) {
+  const geminiKey = (process.env.GEMINI_API_KEY || '').replace(/\s/g, '');
+  const voiceMap = {
+    'ml-IN': 'Aoede', 'hi-IN': 'Kore', 'ta-IN': 'Aoede',
+    'te-IN': 'Aoede', 'kn-IN': 'Aoede', 'en-IN': 'Zephyr',
+    'bn-IN': 'Zephyr', 'gu-IN': 'Aoede', 'mr-IN': 'Aoede',
+  };
+  const voiceName = voiceMap[lang] || 'Zephyr';
+
+  if (geminiKey) {
+    try {
+      const textRes = await axios.post(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
+        {
+          contents: [{ parts: [{ text: prompt }] }],
+          systemInstruction: { parts: [{ text: systemPrompt || 'You are Nexus, a legal AI for Indian advocates. Be brief and clear.' }] }
+        },
+        { timeout: 10000 }
+      );
+      const text = textRes.data.candidates[0].content.parts[0].text;
+      try {
+        const ttsRes = await axios.post(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${geminiKey}`,
+          {
+            contents: [{ parts: [{ text: text.slice(0, 800) }] }],
+            generationConfig: {
+              responseModalities: ['AUDIO'],
+              speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } }
+            }
+          },
+          { timeout: 15000 }
+        );
+        const audioPart = ttsRes.data.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+        const audio = audioPart?.inlineData?.data;
+        return { text, audio, model: 'gemini' };
+      } catch (ttsErr) {
+        console.log('Gemini TTS failed, returning text only:', ttsErr.message);
+        return { text, audio: null, model: 'gemini' };
+      }
+    } catch (e) {
+      console.log('Gemini AI failed in playAISpeak:', e.message);
+    }
+  }
+
+  // Fallback to callAI text only
+  const result = await callAI(prompt, systemPrompt);
+  return { text: result.text, audio: null, model: result.model };
+}
+
+// Route: POST /api/ai/speak
+app.post('/api/ai/speak', authMiddleware, async (req, res) => {
+  const { prompt, systemPrompt, lang = 'en-IN' } = req.body;
+  if (!prompt) return res.json({ ok: false, error: 'No prompt' });
+  try {
+    const result = await playAISpeak(prompt, systemPrompt, lang);
+    res.json({ ok: true, text: result.text, audio: result.audio, model: result.model });
+  } catch (e) {
+    res.json({ ok: false, error: e.message });
+  }
+});
 
 
 // ─── Sarvam AI (TTS / Translation) ──────────────────────────────────────────
