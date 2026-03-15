@@ -217,7 +217,32 @@ export default function AdvocatePortal() {
   const recognitionRef = useRef(null);
 
   useEffect(() => { deskChatRef.current?.scrollTo({ top: 99999, behavior: 'smooth' }); }, [deskChatHistory]);
-
+// ── Fast PCM Audio Player (Web Audio API — faster than Audio element) ──
+  const playPCMAudio = async (base64) => {
+    try {
+      const binaryString = atob(base64);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+      const dataInt16 = new Int16Array(bytes.buffer);
+      const buffer = ctx.createBuffer(1, dataInt16.length, 24000);
+      const channelData = buffer.getChannelData(0);
+      for (let i = 0; i < dataInt16.length; i++) {
+        channelData[i] = dataInt16[i] / 32768.0;
+      }
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(ctx.destination);
+      return new Promise(resolve => {
+        source.onended = () => { ctx.close(); resolve(); };
+        source.start();
+      });
+    } catch (err) {
+      console.error('PCM Audio Error:', err);
+    }
+  };
   // ── TTS: Read page aloud (Sarvam Bulbul v3) ──
  // ── TTS: Read page aloud (Web Speech first → Sarvam fallback) ──
 const readPageAloud = (pageIdx) => {
@@ -1084,53 +1109,82 @@ const voiceSpeak = async (text, onEnd) => {
 
  const startDockListening = () => {
   if (!voiceAiOnRef.current) return;
-  // Stop any existing recording
-  if (dockRecRef.current) { try { dockRecRef.current.stop(); } catch {} dockRecRef.current = null; }
-  setVoiceAiListening(true);
+  if (dockRecRef.current) {
+    try { dockRecRef.current.stop(); } catch {}
+    dockRecRef.current = null;
+  }
 
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
-  // ✅ Try free Web Speech Recognition first (Google on Android/Chrome)
+  // ✅ Web Speech Recognition — Always-On Continuous mode
   if (SpeechRecognition) {
     const recognition = new SpeechRecognition();
-    // Detect language from current context
     const langMap = { ml: 'ml-IN', hi: 'hi-IN', ta: 'ta-IN', te: 'te-IN', kn: 'kn-IN', bn: 'bn-IN', gu: 'gu-IN', pa: 'pa-IN', mr: 'mr-IN', ur: 'ur-IN', en: 'en-IN' };
     recognition.lang = langMap[detectedLang?.code] || 'ml-IN';
-    recognition.continuous = false;
-    recognition.interimResults = false;
+    recognition.continuous = true;       // ✅ Always-On — never stops listening
+    recognition.interimResults = true;   // ✅ Shows text while speaking
     recognition.maxAlternatives = 1;
 
-    recognition.onstart = () => setVoiceAiListening(true);
+    let lastProcessed = '';
+    let processingLock = false;
 
-    recognition.onresult = (e) => {
-      const transcript = e.results[0][0].transcript.trim();
-      setVoiceAiTranscript(transcript);
-      if (transcript) {
-        executeVoiceCommand(transcript);
-      } else {
-        setVoiceAiReply('Could not hear clearly. Tap the mic to try again.');
-        if (voiceAiOnRef.current) setTimeout(() => startDockListening(), 1000);
+    recognition.onstart = () => {
+      setVoiceAiListening(true);
+    };
+
+    recognition.onresult = async (event) => {
+      let interimTranscript = '';
+      let finalTranscript = '';
+
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        if (event.results[i].isFinal) {
+          finalTranscript += event.results[i][0].transcript;
+        } else {
+          interimTranscript += event.results[i][0].transcript;
+        }
+      }
+
+      // Show interim text while user speaks
+      if (interimTranscript) {
+        setVoiceAiTranscript(interimTranscript);
+      }
+
+      // Process final transcript
+      if (finalTranscript && finalTranscript.trim() !== lastProcessed && !processingLock) {
+        lastProcessed = finalTranscript.trim();
+        processingLock = true;
+
+        // Stop mic while AI is thinking/speaking
+        try { recognition.stop(); } catch {}
+
+        await executeVoiceCommand(finalTranscript.trim());
+        processingLock = false;
       }
     };
 
-    recognition.onend = () => { setVoiceAiListening(false); };
+    recognition.onend = () => {
+      setVoiceAiListening(false);
+      // Auto restart if voice AI still on and not busy
+      if (voiceAiOnRef.current && !voiceAiThinking && !voiceAiSpeaking) {
+        setTimeout(() => startDockListening(), 300);
+      }
+    };
 
     recognition.onerror = (e) => {
       setVoiceAiListening(false);
       if (e.error === 'not-allowed') {
         voiceSpeak('Microphone access denied. Please allow mic permission.', undefined);
-      } else {
-        setVoiceAiReply('Could not hear clearly. Tap the mic to try again.');
-        if (voiceAiOnRef.current) setTimeout(() => startDockListening(), 1000);
+      } else if (e.error !== 'no-speech' && e.error !== 'aborted') {
+        if (voiceAiOnRef.current) setTimeout(() => startDockListening(), 500);
       }
     };
 
     dockRecRef.current = recognition;
     recognition.start();
-    return; // ✅ Done — no API cost
+    return;
   }
 
-  // Fallback: Sarvam STT (paid)
+  // Fallback: Sarvam STT (paid) for unsupported browsers
   navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
     const chunks = [];
     const preferredMime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus', ''].find(
@@ -1173,7 +1227,6 @@ const voiceSpeak = async (text, onEnd) => {
     voiceSpeak('Microphone access denied. Please allow mic permission.', undefined);
   });
 };
-
   const toggleVoiceAi = () => {
     if (voiceAiOn) {
       // Turn off — stop recorder and audio
