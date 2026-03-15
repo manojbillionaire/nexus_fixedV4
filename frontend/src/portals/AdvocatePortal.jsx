@@ -1101,29 +1101,10 @@ const voiceSpeak = async (text, onEnd) => {
     setVoiceAiThinking(false);
     setVoiceAiReply(replyText);
     setVoiceAiLog(l => [...l, { role: 'user', text: transcript }, { role: 'ai', text: replyText }]);
-    // Try combined Gemini speak (text+audio in one) for speed
-const speakLang = detectLanguage(replyText);
-const speakLangMap = { ml: 'ml-IN', hi: 'hi-IN', ta: 'ta-IN', te: 'te-IN', kn: 'kn-IN', en: 'en-IN' };
-const speakLangCode = speakLangMap[speakLang?.code] || 'en-IN';
-try {
-  const speakRes = await api.post('/api/ai/speak', {
-    prompt: cleanForSpeech(replyText),
-    lang: speakLangCode
-  });
-  if (speakRes.data.ok && speakRes.data.audio) {
-    setVoiceAiSpeaking(true);
-    await playPCMAudio(speakRes.data.audio);
-    setVoiceAiSpeaking(false);
-    if (voiceAiOnRef.current) setTimeout(() => startDockListening(), 300);
-    return;
-  }
-} catch {}
-// Fallback to Web Speech
+   // Speak directly using Web Speech (fastest — no API call)
 voiceSpeak(cleanForSpeech(replyText), () => {
-  if (voiceAiOnRef.current) setTimeout(() => startDockListening(), 400);
+  if (voiceAiOnRef.current) setTimeout(() => startDockListening(), 300);
 });
-  };
-
  const startDockListening = () => {
   if (!voiceAiOnRef.current) return;
   if (dockRecRef.current) {
