@@ -2,32 +2,47 @@ import { useState, useEffect } from 'react';
 import api from './api.js';
 import AuthPortal from './portals/AuthPortal.jsx';
 import AdvocatePortal from './portals/AdvocatePortal.jsx';
-import AgencyHQPortal from './portals/AgencyHQPortal.jsx';
 import AffiliatePortal from './portals/AffiliatePortal.jsx';
 import PWAManager from './PWAManager.jsx';
+import SubscriptionGuard from './components/SubscriptionGuard.jsx';
 
-// Role → allowed portal screen
+// ── Role resolution — Agency HQ deliberately excluded from this app ───────────
 function resolveScreen(user) {
   if (!user) return 'auth';
   switch (user.role) {
-    case 'agency':    return 'agency';
     case 'affiliate': return 'affiliate';
     case 'advocate':  return 'advocate';
-    default:          return 'advocate'; // fallback
+    case 'agency':    return 'agency-blocked'; // agency must use admin portal
+    default:          return 'advocate';
   }
 }
 
-function AccessDenied({ role, onLogout }) {
+function AgencyBlocked({ onLogout }) {
   return (
-    <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'calc(var(--vh, 1vh) * 100)', background:'#020617', fontFamily:"'Inter',system-ui,sans-serif" }}>
-      <div style={{ textAlign:'center', maxWidth:420, padding:32 }}>
-        <div style={{ fontSize:56, marginBottom:16 }}>🚫</div>
-        <h2 style={{ color:'#e2e8f0', fontWeight:900, fontSize:22, margin:'0 0 12px' }}>Access Denied</h2>
-        <p style={{ color:'#475569', fontSize:13, lineHeight:1.7, marginBottom:24 }}>
-          Your role <strong style={{ color:'#f59e0b' }}>({role})</strong> does not have permission to access this portal.
-          You can only access the portal assigned to your account.
+    <div style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      height: 'calc(var(--vh,1vh)*100)', background: '#020617',
+      fontFamily: "'Inter',system-ui,sans-serif",
+    }}>
+      <div style={{ textAlign: 'center', maxWidth: 440, padding: 32 }}>
+        <div style={{ fontSize: 56, marginBottom: 16 }}>🔒</div>
+        <h2 style={{ color: '#e2e8f0', fontWeight: 900, fontSize: 22, margin: '0 0 12px' }}>
+          Agency HQ — Wrong Portal
+        </h2>
+        <p style={{ color: '#475569', fontSize: 13, lineHeight: 1.7, marginBottom: 8 }}>
+          Agency HQ accounts cannot access this portal.
         </p>
-        <button onClick={onLogout} style={{ padding:'12px 28px', background:'#6366f1', border:'none', borderRadius:12, color:'#fff', fontSize:13, fontWeight:900, cursor:'pointer', fontFamily:'inherit' }}>
+        <p style={{ color: '#334155', fontSize: 12, lineHeight: 1.7, marginBottom: 28 }}>
+          Please use the dedicated Agency HQ admin portal URL provided by your system administrator.
+        </p>
+        <button
+          onClick={onLogout}
+          style={{
+            padding: '12px 28px', background: '#6366f1',
+            border: 'none', borderRadius: 12, color: '#fff',
+            fontSize: 13, fontWeight: 900, cursor: 'pointer',
+          }}
+        >
           ← Back to Sign In
         </button>
       </div>
@@ -43,10 +58,7 @@ export default function App() {
     const token = localStorage.getItem('nj_token');
     const userData = localStorage.getItem('nj_user');
     if (token && userData) {
-      try {
-        const user = JSON.parse(userData);
-        setCurrentUser(user);
-      } catch {}
+      try { setCurrentUser(JSON.parse(userData)); } catch {}
     }
     setLoading(false);
   }, []);
@@ -65,28 +77,39 @@ export default function App() {
 
   if (loading) {
     return (
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'calc(var(--vh, 1vh) * 100)', background:'#020617' }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'calc(var(--vh,1vh)*100)', background:'#020617' }}>
         <style>{'@keyframes spin{to{transform:rotate(360deg)}}'}</style>
         <div style={{ textAlign:'center' }}>
           <div style={{ width:56, height:56, background:'#f59e0b', borderRadius:16, display:'inline-flex', alignItems:'center', justifyContent:'center', marginBottom:16, boxShadow:'0 8px 32px rgba(245,158,11,.35)' }}>
-            <span style={{ fontSize:28, fontWeight:900, color:'#000', fontStyle:'italic' }}>T</span>
+            <span style={{ fontSize:28, fontWeight:900, color:'#000', fontStyle:'italic' }}>N</span>
           </div>
-          <div style={{ fontSize:12, color:'#475569', fontWeight:700, letterSpacing:'0.2em', textTransform:'uppercase' }}>Loading Nexus Justice…</div>
+          <div style={{ fontSize:12, color:'#475569', fontWeight:700, letterSpacing:'0.2em', textTransform:'uppercase' }}>
+            Loading Nexus Justice…
+          </div>
         </div>
       </div>
     );
   }
 
-  // Not logged in → show auth
   if (!currentUser) return <><PWAManager /><AuthPortal onLogin={handleLogin} /></>;
 
-  // Role-based portal routing — strict, no cross-role access
   const screen = resolveScreen(currentUser);
 
-  if (screen === 'agency')    return <><PWAManager /><AgencyHQPortal   user={currentUser} onLogout={handleLogout} /></>;
-  if (screen === 'affiliate') return <><PWAManager /><AffiliatePortal  user={currentUser} onLogout={handleLogout} /></>;
-  if (screen === 'advocate')  return <><PWAManager /><AdvocatePortal   user={currentUser} onLogout={handleLogout} /></>;
+  // Agency accounts blocked — must use admin portal
+  if (screen === 'agency-blocked') return <AgencyBlocked onLogout={handleLogout} />;
 
-  // Unknown role — deny access
-  return <AccessDenied role={currentUser.role} onLogout={handleLogout} />;
+  if (screen === 'affiliate') return (
+    <><PWAManager /><AffiliatePortal user={currentUser} onLogout={handleLogout} /></>
+  );
+
+  if (screen === 'advocate') return (
+    <>
+      <PWAManager />
+      <SubscriptionGuard user={currentUser}>
+        <AdvocatePortal user={currentUser} onLogout={handleLogout} />
+      </SubscriptionGuard>
+    </>
+  );
+
+  return <AgencyBlocked onLogout={handleLogout} />;
 }
