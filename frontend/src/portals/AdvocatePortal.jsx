@@ -1,4 +1,9 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
+import { useHybridAI } from "../utils/useHybridAI.js";
+import { useLiveVoice } from "../utils/useLiveVoice.js";
+import OfflineStatusBar from "../components/OfflineStatusBar.jsx";
+import LocalAISettings from "../components/LocalAISettings.jsx";
+import { offlineDB } from "../utils/OfflineDB.js";
 import api from '../api.js';
 
 const Icon = ({ path, size = 20, strokeWidth = 2 }) => (
@@ -46,8 +51,165 @@ const getCatRgb = (color) => {
   return map[color] || '99,102,241';
 };
 
+// ── Inline subscription renew banner ─────────────────────────────────────────
+function SubscriptionRenewBanner({ user }) {
+  const [sub, setSub] = React.useState(null);
+  const [payLoading, setPayLoading] = React.useState(false);
+  const [payMsg, setPayMsg] = React.useState('');
+
+  React.useEffect(() => {
+    if (!user || user.role !== 'advocate') return;
+    import('../api.js').then(m => {
+      m.default.get('/api/advocate/subscription')
+        .then(r => setSub(r.data))
+        .catch(() => {});
+    });
+  }, [user]);
+
+  if (!sub || sub.status === 'active') return null;
+
+  const handlePay = async () => {
+    setPayLoading(true); setPayMsg('');
+    try {
+      const api = (await import('../api.js')).default;
+      const orderRes = await api.post('/api/payment/create-order', { months: 1, plan: sub.plan || 'Pro' });
+      const { order, key } = orderRes.data;
+      if (!key || !order) { setPayMsg('Payment gateway not configured. Contact Agency.'); setPayLoading(false); return; }
+      if (!window.Razorpay) {
+        await new Promise((res, rej) => {
+          const s = document.createElement('script');
+          s.src = 'https://checkout.razorpay.com/v1/checkout.js';
+          s.onload = res; s.onerror = rej;
+          document.head.appendChild(s);
+        });
+      }
+      new window.Razorpay({
+        key, amount: order.amount, currency: order.currency,
+        name: 'Nexus Justice', description: `Subscription Renewal`,
+        order_id: order.id,
+        prefill: { name: user?.name || '', email: user?.email || '' },
+        theme: { color: '#6366f1' },
+        handler: async (resp) => {
+          try {
+            await api.post('/api/payment/verify', { ...resp, months: 1, plan: sub.plan || 'Pro' });
+            setPayMsg('✅ Payment successful! Refreshing...');
+            setTimeout(() => window.location.reload(), 1500);
+          } catch { setPayMsg('Verification failed. Contact Agency.'); }
+          setPayLoading(false);
+        },
+        modal: { ondismiss: () => setPayLoading(false) },
+      }).open();
+    } catch (e) { setPayMsg(e.response?.data?.error || 'Payment failed.'); setPayLoading(false); }
+  };
+
+  return (
+    <div style={{
+      background: sub.status === 'grace' ? 'rgba(245,158,11,0.08)' : 'rgba(239,68,68,0.08)',
+      border: `1px solid ${sub.status === 'grace' ? 'rgba(245,158,11,0.25)' : 'rgba(239,68,68,0.25)'}`,
+      borderRadius: 14, padding: '16px 18px', marginBottom: 16,
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10,
+    }}>
+      <div>
+        <div style={{ fontSize: 12, fontWeight: 900, color: sub.status === 'grace' ? '#f59e0b' : '#f87171', marginBottom: 4 }}>
+          {sub.status === 'grace' ? `⚠️ Subscription expires in ${sub.daysLeft} day${sub.daysLeft !== 1 ? 's' : ''}` : '🔒 Subscription Expired'}
+        </div>
+        <div style={{ fontSize: 11, color: '#475569' }}>
+          {sub.status === 'grace' ? 'Renew now to avoid service interruption.' : 'Renew to restore cloud AI access.'}
+        </div>
+        {payMsg && <div style={{ fontSize: 11, color: payMsg.startsWith('✅') ? '#10b981' : '#f87171', marginTop: 4 }}>{payMsg}</div>}
+      </div>
+      <button onClick={handlePay} disabled={payLoading} style={{
+        padding: '10px 20px', background: '#6366f1', border: 'none', borderRadius: 10,
+        color: '#fff', fontSize: 11, fontWeight: 900, cursor: payLoading ? 'not-allowed' : 'pointer',
+        opacity: payLoading ? 0.6 : 1, whiteSpace: 'nowrap',
+      }}>
+        {payLoading ? '⏳ Opening...' : '💳 Renew Now'}
+      </button>
+    </div>
+  );
+}
+
 export default function AdvocatePortal() {
   const [view, setView] = useState("command");
+
+  // ── Hybrid AI (Online/Offline) ────────────────────────────────────────────
+  const {
+    isOnline,
+    localModelStatus,
+    localModelProgress,
+    localModelProgressText,
+    enableLocalAI,
+    disableLocalAI,
+    ask: hybridAsk,
+    isLocalReady,
+  } = useHybridAI();
+  const [pendingSyncCount, setPendingSyncCount] = useState(0);
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  useEffect(() => {
+    offlineDB.getPendingActions().then(a => setPendingSyncCount(a.length)).catch(() => {});
+  }, [isOnline]);
+
+  useEffect(() => {
+    if (isOnline && pendingSyncCount > 0) handleSync();
+  }, [isOnline]);
+
+  const handleSync = async () => {
+    if (isSyncing || !isOnline) return;
+    setIsSyncing(true);
+    try {
+      const pending = await offlineDB.getPendingActions();
+      if (pending.length > 0) {
+        await api.post('/api/sync', { actions: pending });
+        await offlineDB.clearSyncQueue();
+        setPendingSyncCount(0);
+      }
+    } catch (e) { console.warn('Sync failed:', e.message); }
+    setIsSyncing(false);
+  };
+
+  // ── Live Voice AI — used in all voice areas ────────────────────────────────
+  const liveVoice = useLiveVoice({
+    onTranscript: (text) => {
+      setVoiceAiTranscript(text);
+    },
+    onThinking: () => {
+      setVoiceAiThinking(true);
+      setVoiceAiListening(false);
+      systemIsBusy.current = true;
+    },
+    onReply: (text, source) => {
+      setVoiceAiThinking(false);
+      setVoiceAiReply(text);
+      setVoiceAiLog(l => [...l,
+        { role: 'user', text: voiceAiTranscript },
+        { role: 'ai', text, source }
+      ]);
+      // Mirror to consult tab
+      setChatHistory(h => [...h,
+        { role: 'user', text: voiceAiTranscript, id: Date.now() },
+        { role: 'ai',   text, id: Date.now() + 1 }
+      ]);
+    },
+    onSpeaking: (isSpeaking) => {
+      setVoiceAiSpeaking(isSpeaking);
+      systemIsBusy.current = isSpeaking;
+    },
+    onListening: (isListening) => {
+      setVoiceAiListening(isListening);
+    },
+    onError: (msg) => {
+      console.warn('LiveVoice error:', msg);
+    },
+    onDraftReady: (draftText) => {
+      // Auto-populate Writing Desk with the AI-generated draft
+      setDraftPages([draftText]);
+      setCurrentPage(1);
+      setView('writing-desk');
+    },
+    history: voiceAiLog,
+    autoRestart: true,
+  });
 
   const [clients, setClients] = useState(CLIENTS);
   const [addingClient, setAddingClient] = useState(false);
@@ -90,6 +252,8 @@ export default function AdvocatePortal() {
   const dockRecRef = useRef(null);
   const dockSynthRef = useRef(null);
   const voiceAiOnRef = useRef(false); // ref to track voiceAiOn inside callbacks
+  const systemIsBusy = useRef(false); // true when AI is thinking/speaking — blocks mic restart
+  const isSpeakingRef = useRef(false); // for stopping sentence-by-sentence reading
   const [notifications, setNotifications] = useState(NOTIFICATIONS);
   const [supportMsgs, setSupportMsgs] = useState([{ id: 1, role: 'ai', text: 'Hello. I am the Nexus Support AI. Please describe any issues you are facing with the platform.' }]);
   const [supportInput, setSupportInput] = useState("");
@@ -217,184 +381,55 @@ export default function AdvocatePortal() {
   const recognitionRef = useRef(null);
 
   useEffect(() => { deskChatRef.current?.scrollTo({ top: 99999, behavior: 'smooth' }); }, [deskChatHistory]);
-// ── Fast PCM Audio Player (Web Audio API — faster than Audio element) ──
-  const playPCMAudio = async (base64) => {
-    try {
-      const binaryString = atob(base64);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
-      const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
-      const dataInt16 = new Int16Array(bytes.buffer);
-      const buffer = ctx.createBuffer(1, dataInt16.length, 24000);
-      const channelData = buffer.getChannelData(0);
-      for (let i = 0; i < dataInt16.length; i++) {
-        channelData[i] = dataInt16[i] / 32768.0;
-      }
-      const source = ctx.createBufferSource();
-      source.buffer = buffer;
-      source.connect(ctx.destination);
-      return new Promise(resolve => {
-        source.onended = () => { ctx.close(); resolve(); };
-        source.start();
-      });
-    } catch (err) {
-      console.error('PCM Audio Error:', err);
-    }
+
+  // ── TTS: Read page aloud — uses liveVoice browser TTS (instant, free) ──
+  const readPageAloud = (pageIdx) => {
+    const text = draftPages[pageIdx] || '';
+    if (!text.trim()) return;
+    setIsSpeaking(true); setSpeakPageNum(pageIdx + 1);
+    liveVoice.speak(text, () => {
+      setIsSpeaking(false); setSpeakPageNum(null);
+    });
   };
-  // ── TTS: Read page aloud (Sarvam Bulbul v3) ──
- // ── TTS: Read page aloud (Web Speech first → Sarvam fallback) ──
-const readPageAloud = (pageIdx) => {
-  const text = draftPages[pageIdx] || '';
-  if (!text.trim()) return;
-  const detectedLangCode = detectedLang?.code || 'en';
-  const langMap = { ml: 'ml-IN', hi: 'hi-IN', ta: 'ta-IN', te: 'te-IN', kn: 'kn-IN', bn: 'bn-IN', gu: 'gu-IN', pa: 'pa-IN', mr: 'mr-IN', ur: 'ur-IN', en: 'en-IN' };
-  const langCode = langMap[detectedLangCode] || 'en-IN';
-
-  // ✅ Try free Web Speech API first
-  if (window.speechSynthesis) {
-    window.speechSynthesis.cancel();
-
-    const speak = (voices) => {
-      const utt = new SpeechSynthesisUtterance(text);
-      utt.lang = langCode;
-      utt.rate = 0.9;
-      utt.pitch = 1.0;
-      const googleExact = voices.find(v =>
-        v.name.toLowerCase().includes('google') &&
-        (v.lang === langCode || v.lang === langCode.replace('-', '_'))
-      );
-      const anyExact = voices.find(v =>
-        v.lang === langCode || v.lang === langCode.replace('-', '_')
-      );
-      const googleHindi = voices.find(v => v.lang === 'hi-IN' && v.name.toLowerCase().includes('google'));
-      const chosen = googleExact || anyExact || googleHindi;
-      if (chosen) utt.voice = chosen;
-      utt.onstart = () => { setIsSpeaking(true); setSpeakPageNum(pageIdx + 1); };
-      utt.onend = () => { setIsSpeaking(false); setSpeakPageNum(null); };
-      utt.onerror = () => { setIsSpeaking(false); setSpeakPageNum(null); };
-      speechSynthRef.current = utt;
-      window.speechSynthesis.speak(utt);
-    };
-
-    const voices = window.speechSynthesis.getVoices();
-    if (voices.length > 0) { speak(voices); return; }
-    window.speechSynthesis.onvoiceschanged = () => {
-      window.speechSynthesis.onvoiceschanged = null;
-      speak(window.speechSynthesis.getVoices());
-    };
-    return;
-  }
-
-  // Fallback: paid API (Gemini → Sarvam Bulbul v3)
-  setIsSpeaking(true); setSpeakPageNum(pageIdx + 1);
-  api.post('/api/sarvam/tts', { text: text.slice(0, 500), lang: langCode })
-    .then(res => {
-      if (res.data.ok && res.data.audio) {
-        const audioBytes = atob(res.data.audio);
-        const audioArr = new Uint8Array(audioBytes.length);
-        for (let i = 0; i < audioBytes.length; i++) audioArr[i] = audioBytes.charCodeAt(i);
-        const blob = new Blob([audioArr], { type: 'audio/wav' });
-        const url = URL.createObjectURL(blob);
-        const audio = new Audio(url);
-        speechSynthRef.current = audio;
-        audio.onended = () => { setIsSpeaking(false); setSpeakPageNum(null); URL.revokeObjectURL(url); };
-        audio.onerror = () => { setIsSpeaking(false); setSpeakPageNum(null); };
-        audio.play();
-      } else { setIsSpeaking(false); setSpeakPageNum(null); }
-    })
-    .catch(() => { setIsSpeaking(false); setSpeakPageNum(null); });
-};
   const stopSpeaking = () => {
-    if (speechSynthRef.current instanceof Audio) {
-      speechSynthRef.current.pause();
-      speechSynthRef.current.src = '';
-    } else {
-      window.speechSynthesis?.cancel();
-    }
+    isSpeakingRef.current = false;
+    systemIsBusy.current = false;
+    liveVoice.stopSpeaking();
     setIsSpeaking(false); setSpeakPageNum(null);
   };
 
-  // ── Voice input (Web Speech API first → Sarvam STT fallback) ──
-const mediaRecorderRef = useRef(null);
-const audioChunksRef = useRef([]);
+  // ── Voice input (Sarvam STT — Saarika v2, multilingual) ──
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
 
-const startVoiceInput = () => {
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-
-  // ✅ Try free Web Speech Recognition first (Google on Android/Chrome)
-  if (SpeechRecognition) {
-    const recognition = new SpeechRecognition();
-    recognition.lang = detectedLang?.code === 'ml' ? 'ml-IN' :
-                       detectedLang?.code === 'hi' ? 'hi-IN' :
-                       detectedLang?.code === 'ta' ? 'ta-IN' :
-                       detectedLang?.code === 'te' ? 'te-IN' :
-                       detectedLang?.code === 'kn' ? 'kn-IN' : 'en-IN';
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
-
-    recognition.onstart = () => setVoiceListening(true);
-    recognition.onresult = (e) => {
-      const transcript = e.results[0][0].transcript;
-      setDeskInput(d => (d + ' ' + transcript).trim());
-      const lang = detectLanguage(transcript);
-      if (lang) setDetectedLang(lang);
+  // Writing Desk mic — Web Speech STT (instant, free)
+  const startVoiceInput = () => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { setDeskInput(d => d + ' [Speech not supported]'); return; }
+    const rec = new SR();
+    rec.continuous = false;
+    rec.interimResults = false;
+    rec.lang = detectedLang?.code ? `${detectedLang.code}-IN` : 'en-IN';
+    rec.onstart = () => setVoiceListening(true);
+    rec.onresult = (e) => {
+      const t = e.results[0]?.[0]?.transcript?.trim();
+      if (t) {
+        setDeskInput(d => (d + ' ' + t).trim());
+        const lang = detectLanguage(t);
+        if (lang) setDetectedLang(lang);
+      }
+      setVoiceListening(false);
     };
-    recognition.onend = () => { setVoiceListening(false); setVoiceTranscript(''); };
-    recognition.onerror = () => { setVoiceListening(false); setVoiceTranscript(''); };
+    rec.onerror = () => setVoiceListening(false);
+    rec.onend = () => setVoiceListening(false);
+    recognitionRef.current = rec;
+    rec.start();
+  };
+  const stopVoiceInput = () => {
+    try { recognitionRef.current?.stop(); } catch {}
+    setVoiceListening(false);
+  };
 
-    recognitionRef.current = recognition;
-    recognition.start();
-    return; // ✅ Done — no API cost
-  }
-
-  // Fallback: Sarvam STT (paid)
-  navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
-    audioChunksRef.current = [];
-    const preferredMime2 = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus', ''].find(
-      m => m === '' || MediaRecorder.isTypeSupported(m)
-    );
-    const mr = preferredMime2 ? new MediaRecorder(stream, { mimeType: preferredMime2 }) : new MediaRecorder(stream);
-    const actualMime2 = mr.mimeType || 'audio/webm';
-    mr.ondataavailable = e => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
-    mr.onstop = async () => {
-      stream.getTracks().forEach(t => t.stop());
-      const blob = new Blob(audioChunksRef.current, { type: actualMime2 });
-      const reader = new FileReader();
-      reader.onloadend = async () => {
-        const base64 = reader.result.split(',')[1];
-        try {
-          const res = await api.post('/api/sarvam/stt', { audioBase64: base64, mimeType: actualMime2, lang: 'auto' });
-          if (res.data.ok && res.data.transcript) {
-            setDeskInput(d => (d + ' ' + res.data.transcript).trim());
-            const lang = detectLanguage(res.data.transcript);
-            if (lang) setDetectedLang(lang);
-          }
-        } catch {}
-        setVoiceListening(false); setVoiceTranscript('');
-      };
-      reader.readAsDataURL(blob);
-    };
-    mediaRecorderRef.current = mr;
-    mr.start();
-    setVoiceListening(true);
-  }).catch(() => {
-    setDeskInput(d => d + '[Mic access denied]');
-  });
-};
-
-const stopVoiceInput = () => {
-  // Stop Web Speech Recognition if active
-  if (recognitionRef.current) {
-    recognitionRef.current.stop();
-    recognitionRef.current = null;
-  }
-  // Stop MediaRecorder if active
-  mediaRecorderRef.current?.stop();
-  setVoiceListening(false); setVoiceTranscript('');
-};
   // ── Page management ──
   const addNewPage = () => {
     if (draftPages.length >= MAX_PAGES) return;
@@ -543,54 +578,12 @@ const stopVoiceInput = () => {
     setTransLoading(false);
   };
 
-const doTts = () => {
-  if (!transResult) return;
-  setTransTtsLoading(true);
+  const doTts = () => {
+    if (!transResult) return;
+    setTransTtsLoading(true);
+    liveVoice.speak(transResult, () => setTransTtsLoading(false));
+  };
 
-  // ✅ Try free Web Speech API first
-  if (window.speechSynthesis) {
-    window.speechSynthesis.cancel();
-
-    const speak = (voices) => {
-      const utt = new SpeechSynthesisUtterance(transResult);
-      utt.lang = transTargetLang;
-      utt.rate = 0.9;
-      utt.pitch = 1.0;
-      const googleExact = voices.find(v =>
-        v.name.toLowerCase().includes('google') &&
-        (v.lang === transTargetLang || v.lang === transTargetLang.replace('-', '_'))
-      );
-      const anyExact = voices.find(v =>
-        v.lang === transTargetLang || v.lang === transTargetLang.replace('-', '_')
-      );
-      const googleHindi = voices.find(v => v.lang === 'hi-IN' && v.name.toLowerCase().includes('google'));
-      const chosen = googleExact || anyExact || googleHindi;
-      if (chosen) utt.voice = chosen;
-      utt.onend = () => setTransTtsLoading(false);
-      utt.onerror = () => setTransTtsLoading(false);
-      window.speechSynthesis.speak(utt);
-    };
-
-    const voices = window.speechSynthesis.getVoices();
-    if (voices.length > 0) { speak(voices); return; }
-    window.speechSynthesis.onvoiceschanged = () => {
-      window.speechSynthesis.onvoiceschanged = null;
-      speak(window.speechSynthesis.getVoices());
-    };
-    return;
-  }
-
-  // Fallback: paid API (Gemini → Sarvam Bulbul v3)
-  api.post('/api/sarvam/tts', { text: transResult, lang: transTargetLang })
-    .then(res => {
-      if (res.data.ok && res.data.audio) {
-        const audio = new Audio('data:audio/wav;base64,' + res.data.audio);
-        audio.play();
-      }
-      setTransTtsLoading(false);
-    })
-    .catch(() => { setTransTtsLoading(false); });
-};
   const useScannedTextForTranslation = () => {
     const text = convPages.map(p => p.text).join('\n\n').trim();
     if (text) { setTransSourceText(text.slice(0, 2000)); setTransResult(''); }
@@ -940,65 +933,29 @@ const doTts = () => {
       .trim();
   };
 
-const voiceSpeak = async (text, onEnd) => {
-  if (!text?.trim()) { onEnd?.(); return; }
-  const lang = detectLanguage(text);
-  const langMap = { ml: 'ml-IN', hi: 'hi-IN', ta: 'ta-IN', te: 'te-IN', kn: 'kn-IN', bn: 'bn-IN', gu: 'gu-IN', pa: 'pa-IN', mr: 'mr-IN', ur: 'ur-IN', en: 'en-IN' };
-  const langCode = langMap[lang?.code] || 'en-IN';
-
-  // ✅ Web Speech API first (Google voice on Android/Chrome)
-  if (window.speechSynthesis) {
-    window.speechSynthesis.cancel();
-
-    const speak = (voices) => {
-      const utt = new SpeechSynthesisUtterance(text);
-      utt.lang = langCode;
-      utt.rate = 0.9;
-      utt.pitch = 1.0;
-      const preferred = voices.find(v => v.lang === langCode || v.lang === langCode.replace('-', '_'));
-      if (preferred) utt.voice = preferred;
-      utt.onstart = () => setVoiceAiSpeaking(true);
-      utt.onend = () => { setVoiceAiSpeaking(false); onEnd?.(); };
-      utt.onerror = () => { setVoiceAiSpeaking(false); onEnd?.(); };
-      dockSynthRef.current = utt;
-      window.speechSynthesis.speak(utt);
-    };
-
-    const voices = window.speechSynthesis.getVoices();
-    if (voices.length > 0) {
-      speak(voices); // voices already loaded
-      return;
+  // ── Sentence-by-sentence TTS — starts speaking immediately ──────────────
+  const speakSentences = async (text, onDone) => {
+    if (!text?.trim()) { onDone?.(); return; }
+    const sentences = text
+      .replace(/([.!?।॥\n])\ */g, '$1|')
+      .split('|')
+      .map(s => s.trim())
+      .filter(s => s.length > 2);
+    if (sentences.length === 0) { onDone?.(); return; }
+    for (let i = 0; i < sentences.length; i++) {
+      if (!voiceAiOnRef.current && i > 0) break;
+      if (!systemIsBusy.current && i > 0) break;
+      await new Promise(resolve => { voiceSpeak(sentences[i], resolve); });
+      await new Promise(r => setTimeout(r, 150));
     }
-    // Wait for voices to load then speak
-    window.speechSynthesis.onvoiceschanged = () => {
-      const v = window.speechSynthesis.getVoices();
-      window.speechSynthesis.onvoiceschanged = null;
-      speak(v);
-    };
-    return;
-  }
+    onDone?.();
+  };
 
-  // Fallback: paid API (Gemini → Sarvam Bulbul v3)
-  setVoiceAiSpeaking(true);
-  try {
-    const chunk = text.slice(0, 500);
-    const res = await api.post('/api/sarvam/tts', { text: chunk, lang: langCode });
-    if (res.data.ok && res.data.audio) {
-      const audioBytes = atob(res.data.audio);
-      const audioArr = new Uint8Array(audioBytes.length);
-      for (let i = 0; i < audioBytes.length; i++) audioArr[i] = audioBytes.charCodeAt(i);
-      const blob = new Blob([audioArr], { type: 'audio/wav' });
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      dockSynthRef.current = audio;
-      audio.onended = () => { setVoiceAiSpeaking(false); URL.revokeObjectURL(url); onEnd?.(); };
-      audio.onerror = () => { setVoiceAiSpeaking(false); URL.revokeObjectURL(url); onEnd?.(); };
-      await audio.play().catch(() => { setVoiceAiSpeaking(false); URL.revokeObjectURL(url); onEnd?.(); });
-      return;
-    }
-  } catch {}
-  setVoiceAiSpeaking(false); onEnd?.();
-};
+  // voiceSpeak — lightweight browser TTS wrapper (used for call announcements)
+  const voiceSpeak = (text, onEnd) => {
+    if (!text?.trim()) { onEnd?.(); return; }
+    liveVoice.speak(text, onEnd);
+  };
 
   // Parse voice command → action, returns { action, param } or null
   const parseVoiceCommand = (text) => {
@@ -1039,6 +996,7 @@ const voiceSpeak = async (text, onEnd) => {
   };
 
   const executeVoiceCommand = async (transcript) => {
+    systemIsBusy.current = true;
     setVoiceAiThinking(true);
     setVoiceAiTranscript(transcript);
     const cmd = parseVoiceCommand(transcript);
@@ -1081,13 +1039,13 @@ const voiceSpeak = async (text, onEnd) => {
         const history = voiceAiLog.slice(-6).map(m => ({ role: m.role, text: m.text }));
         const lang = detectLanguage(transcript);
         if (lang) setDetectedLang(lang);
-        const res = await api.post('/api/ai/consult', {
-          message: transcript,
-          history,
-          languageInstruction: LANGUAGE_SYSTEM_INSTRUCTION,
-          detectedLanguage: lang?.label || 'auto',
-        });
-        replyText = res.data.reply;
+        // Hybrid AI: uses local model when offline, cloud when online
+        const aiResult = await hybridAsk(transcript, voiceAiLog.slice(-6), {});
+        if (aiResult.subscriptionExpired) {
+          replyText = '🔒 Subscription expired. Please contact your Agency to renew.';
+        } else {
+          replyText = aiResult.text;
+        }
         // Also populate consult tab
         setChatHistory(h => [...h,
           { role: 'user', text: transcript, id: Date.now() },
@@ -1101,167 +1059,45 @@ const voiceSpeak = async (text, onEnd) => {
     setVoiceAiThinking(false);
     setVoiceAiReply(replyText);
     setVoiceAiLog(l => [...l, { role: 'user', text: transcript }, { role: 'ai', text: replyText }]);
-   // Speak directly using Web Speech (fastest — no API call)
-voiceSpeak(cleanForSpeech(replyText), () => {
-  if (voiceAiOnRef.current) setTimeout(() => startDockListening(), 300);
-});
- const startDockListening = () => {
-  if (!voiceAiOnRef.current) return;
-  if (dockRecRef.current) {
-    try { dockRecRef.current.stop(); } catch {}
-    dockRecRef.current = null;
-  }
+    systemIsBusy.current = false;
+    speakSentences(cleanForSpeech(replyText), () => {
+      if (voiceAiOnRef.current) setTimeout(() => startDockListening(), 300);
+    });
+  };
 
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  // startDockListening — now just delegates to liveVoice.start (Web Speech)
+  const startDockListening = () => {
+    if (!voiceAiOnRef.current) return;
+    liveVoice.start();
+  };
 
-  // ✅ Web Speech Recognition — Always-On Continuous mode
-  if (SpeechRecognition) {
-    const recognition = new SpeechRecognition();
-    const langMap = { ml: 'ml-IN', hi: 'hi-IN', ta: 'ta-IN', te: 'te-IN', kn: 'kn-IN', bn: 'bn-IN', gu: 'gu-IN', pa: 'pa-IN', mr: 'mr-IN', ur: 'ur-IN', en: 'en-IN' };
-    recognition.lang = langMap[detectedLang?.code] || 'ml-IN';
-    recognition.continuous = true;       // ✅ Always-On — never stops listening
-    recognition.interimResults = true;   // ✅ Shows text while speaking
-    recognition.maxAlternatives = 1;
-
-    let lastProcessed = '';
-    let processingLock = false;
-
-    recognition.onstart = () => {
-      setVoiceAiListening(true);
-    };
-
-    recognition.onresult = async (event) => {
-      let interimTranscript = '';
-      let finalTranscript = '';
-
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        if (event.results[i].isFinal) {
-          finalTranscript += event.results[i][0].transcript;
-        } else {
-          interimTranscript += event.results[i][0].transcript;
-        }
-      }
-
-      // Show interim text while user speaks
-      if (interimTranscript) {
-        setVoiceAiTranscript(interimTranscript);
-      }
-
-      // Process final transcript
-      if (finalTranscript && finalTranscript.trim() !== lastProcessed && !processingLock) {
-        lastProcessed = finalTranscript.trim();
-        processingLock = true;
-
-        // Stop mic while AI is thinking/speaking
-        try { recognition.stop(); } catch {}
-
-        await executeVoiceCommand(finalTranscript.trim());
-        processingLock = false;
-      }
-    };
-
-    recognition.onend = () => {
-      setVoiceAiListening(false);
-      // Auto restart if voice AI still on and not busy
-      if (voiceAiOnRef.current && !voiceAiThinking && !voiceAiSpeaking) {
-        setTimeout(() => startDockListening(), 300);
-      }
-    };
-
-    recognition.onerror = (e) => {
-      setVoiceAiListening(false);
-      if (e.error === 'not-allowed') {
-        voiceSpeak('Microphone access denied. Please allow mic permission.', undefined);
-      } else if (e.error !== 'no-speech' && e.error !== 'aborted') {
-        if (voiceAiOnRef.current) setTimeout(() => startDockListening(), 500);
-      }
-    };
-
-    dockRecRef.current = recognition;
-    recognition.start();
-    return;
-  }
-
-  // Fallback: Sarvam STT (paid) for unsupported browsers
-  navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
-    const chunks = [];
-    const preferredMime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus', ''].find(
-      m => m === '' || MediaRecorder.isTypeSupported(m)
-    );
-    const mr = preferredMime ? new MediaRecorder(stream, { mimeType: preferredMime }) : new MediaRecorder(stream);
-    const actualMime = mr.mimeType || 'audio/webm';
-    dockRecRef.current = mr;
-    mr.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
-    mr.onstop = async () => {
-      stream.getTracks().forEach(t => t.stop());
-      setVoiceAiListening(false);
-      if (!voiceAiOnRef.current) return;
-      const blob = new Blob(chunks, { type: actualMime });
-      if (blob.size < 1000) {
-        if (voiceAiOnRef.current) setTimeout(() => startDockListening(), 400);
-        return;
-      }
-      const reader = new FileReader();
-      reader.onloadend = async () => {
-        const base64 = reader.result.split(',')[1];
-        try {
-          const res = await api.post('/api/sarvam/stt', { audioBase64: base64, mimeType: actualMime, lang: 'auto' });
-          if (res.data.ok && res.data.transcript?.trim()) {
-            executeVoiceCommand(res.data.transcript.trim());
-          } else {
-            setVoiceAiReply('Could not hear clearly. Tap the mic to try again.');
-            if (voiceAiOnRef.current) setTimeout(() => startDockListening(), 1000);
-          }
-        } catch {
-          setVoiceAiReply('Voice service unavailable. Please check your API key.');
-        }
-      };
-      reader.readAsDataURL(blob);
-    };
-    mr.start();
-    setTimeout(() => { if (mr.state === 'recording') mr.stop(); }, 6000);
-  }).catch(() => {
-    setVoiceAiListening(false);
-    voiceSpeak('Microphone access denied. Please allow mic permission.', undefined);
-  });
-};
   const toggleVoiceAi = () => {
     if (voiceAiOn) {
-      // Turn off — stop recorder and audio
-      if (dockRecRef.current) { try { dockRecRef.current.stop(); } catch {} dockRecRef.current = null; }
-      if (dockSynthRef.current instanceof Audio) {
-        dockSynthRef.current.pause();
-        dockSynthRef.current.src = '';
-      } else {
-        window.speechSynthesis?.cancel();
-      }
-      setVoiceAiOn(false);
+      // Turn OFF
+      liveVoice.stop();
       voiceAiOnRef.current = false;
+      setVoiceAiOn(false);
       setVoiceAiListening(false);
       setVoiceAiSpeaking(false);
       setVoiceAiThinking(false);
       setVoiceAiTranscript('');
       setVoiceAiReply('');
+      systemIsBusy.current = false;
     } else {
+      // Turn ON
       setVoiceAiOn(true);
       voiceAiOnRef.current = true;
       setVoiceAiLog([]);
-      setVoiceAiReply('');
+      setVoiceAiReply('Nexus Live Voice ready. How can I help you?');
       setVoiceAiTranscript('');
-     
-    
-// Start listening immediately  
-setTimeout(() => startDockListening(), 200);
-setVoiceAiReply('Welcome! How can I help you today?');
- 
-
+      systemIsBusy.current = false;
+      setTimeout(() => liveVoice.start(), 300);
     }
   };
 
   const sendConsult = async () => {
     if (!consoleInput.trim() || consoleLoading) return;
     const text = consoleInput.trim(); setConsoleInput('');
-    // Detect language from user input and update indicator
     const lang = detectLanguage(text);
     if (lang) setDetectedLang(lang);
     const userMsg = { role: 'user', text, id: Date.now() };
@@ -1269,6 +1105,19 @@ setVoiceAiReply('Welcome! How can I help you today?');
     setConsoleLoading(true);
     try {
       const history = chatHistory.map(m => ({ role: m.role, text: m.text }));
+      // Use hybridAsk for text queries
+      const aiResult = await hybridAsk(text, chatHistory.slice(-6), {});
+      const reply = aiResult.subscriptionExpired
+        ? '🔒 Subscription expired. Please contact your Agency to renew.'
+        : aiResult.text;
+      setChatHistory(h => [...h, { role: 'ai', text: reply, id: Date.now(), model: aiResult.model }]);
+      // Also speak the reply via live voice
+      liveVoice.speakReply(reply);
+      setConsoleLoading(false);
+      return;
+    } catch {}
+    // legacy fallback path below — kept for safety
+    try {
       const res = await api.post('/api/ai/consult', {
         message: text,
         history,
@@ -2756,6 +2605,9 @@ setVoiceAiReply('Welcome! How can I help you today?');
                 <h2 style={{ fontSize: 32, fontWeight: 900, fontStyle: 'italic', letterSpacing: '-0.03em', margin: 0 }}>Notifications</h2>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {/* ── Subscription + Self-Renew Banner ─────────────────── */}
+                <SubscriptionRenewBanner user={user} />
+
                 {notifications.map(n => (
                   <div key={n.id} className="fade-up" style={{ ...S.card, display: 'flex', alignItems: 'center', gap: 14, borderColor: n.read ? 'rgba(255,255,255,.05)' : 'rgba(99,102,241,.2)' }}>
                     <div style={{ width: 9, height: 9, borderRadius: '50%', background: n.read ? '#334155' : n.type === 'payment' ? '#10b981' : '#6366f1', flexShrink: 0 }} />
@@ -3856,6 +3708,14 @@ setVoiceAiReply('Welcome! How can I help you today?');
             <div style={{ width: 1, height: 30, background: 'rgba(255,255,255,.1)' }} />
 
             <div style={{ padding: '0 10px' }}>
+              <LocalAISettings
+                localModelStatus={liveVoice.modelStatus}
+                localModelProgress={liveVoice.modelProgress}
+                localModelProgressText={liveVoice.modelText}
+                isOnline={isOnline}
+                onEnable={liveVoice.enableLocalModel}
+                onDisable={disableLocalAI}
+              />
               <div style={{ fontSize: 9, fontWeight: 900, color: '#6366f1', letterSpacing: '0.3em', textTransform: 'uppercase' }}>Nexus Link</div>
               <div style={{ fontSize: 8, fontWeight: 700, color: voiceAiOn ? '#10b981' : '#334155', textTransform: 'uppercase', letterSpacing: '0.1em', marginTop: 2, transition: 'color .3s' }}>
                 {voiceAiOn ? (voiceAiListening ? '● LISTENING' : voiceAiThinking ? '● THINKING' : voiceAiSpeaking ? '● SPEAKING' : '● READY') : 'OFFLINE'}
@@ -3866,5 +3726,6 @@ setVoiceAiReply('Welcome! How can I help you today?');
 
       </div>
     </div>
+    </>
   );
 }
